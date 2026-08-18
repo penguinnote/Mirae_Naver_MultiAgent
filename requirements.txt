@@ -1,0 +1,23 @@
+# 연금 Agent 데이터 파이프라인 — Python 3.10 이상
+#
+#   python -m venv venv && source venv/bin/activate
+#   pip install -r requirements.txt
+#
+# poppler, tesseract 같은 시스템 패키지는 필요 없습니다.
+# PDF 렌더링은 pypdfium2가 자체 처리하고, OCR은 CLOVA API를 씁니다.
+
+# --- 1단계: 문서 추출 (build_dataset.py) ---
+pdfplumber>=0.11,<0.12
+pypdfium2>=4.30,<6
+python-docx>=1.1,<2
+pillow>=10.0
+
+# --- 공통 ---
+python-dotenv>=1.0
+requests>=2.31
+
+# --- 3단계: 임베딩·인덱싱 (embed_and_index.py) ---
+chromadb>=1.0,<2
+
+# --- 4단계: 하이브리드 검색 (search.py) ---
+rank-bm25>=0.2.2
