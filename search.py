@@ -1,4 +1,34 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+연금 Agent — 하이브리드 검색
+=============================
+
+벡터 검색(Chroma) + 키워드 검색(BM25)을 RRF로 합친다.
+
+왜 하이브리드인가
+----------------
+연금 도메인 질의에는 두 종류가 섞여 있다.
+
+  "중도인출하면 세금 얼마나 떼?"        → 의미 검색이 강하다
+  "종류C-P2 판매보수 알려줘"            → 키워드 검색이 강하다
+
+'종류C-P2', 'KR5157450090', '미래에셋퇴직플랜단기증권자투자신탁1호' 같은
+고유명사·코드는 임베딩 공간에서 서로 가깝게 뭉쳐버려서 벡터 검색만으로는
+정확한 하나를 못 집는다. BM25는 반대로 정확히 그걸 집는다.
+둘을 합치면 어느 쪽 질의든 놓치지 않는다.
+
+사용법
+------
+    pip install chromadb rank-bm25 requests python-dotenv
+
+    python search.py "퇴직연금 중도인출 사유가 뭐야?"
+    python search.py "판매보수 얼마야" --fund KR5157450090
+    python search.py "위험등급" --type table -k 10
+"""
+
 from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -6,36 +36,6 @@ import pickle
 import re
 import sys
 from pathlib import Path
-Search · PY
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-연금 Agent — 하이브리드 검색
-=============================
- 
-벡터 검색(Chroma) + 키워드 검색(BM25)을 RRF로 합친다.
- 
-왜 하이브리드인가
-----------------
-연금 도메인 질의에는 두 종류가 섞여 있다.
- 
-  "중도인출하면 세금 얼마나 떼?"        → 의미 검색이 강하다
-  "종류C-P2 판매보수 알려줘"            → 키워드 검색이 강하다
- 
-'종류C-P2', 'KR5157450090', '미래에셋퇴직플랜단기증권자투자신탁1호' 같은
-고유명사·코드는 임베딩 공간에서 서로 가깝게 뭉쳐버려서 벡터 검색만으로는
-정확한 하나를 못 집는다. BM25는 반대로 정확히 그걸 집는다.
-둘을 합치면 어느 쪽 질의든 놓치지 않는다.
- 
-사용법
-------
-    pip install chromadb rank-bm25 requests python-dotenv
- 
-    python search.py "퇴직연금 중도인출 사유가 뭐야?"
-    python search.py "판매보수 얼마야" --fund KR5157450090
-    python search.py "위험등급" --type table -k 10
-"""
-
 
 RRF_K = 60          # Reciprocal Rank Fusion 상수. 통상 60을 쓴다.
 POOL = 60           # 각 검색기에서 가져올 후보 수
@@ -43,8 +43,8 @@ POOL = 60           # 각 검색기에서 가져올 후보 수
 RERANK_URL = "https://clovastudio.stream.ntruss.com/v1/api-tools/reranker"
 RERANK_IN = 15      # 리랭커에 넘길 후보 수 (RRF 상위 N개)
 RERANK_DOC_CHARS = 1200   # 문서당 잘라 보낼 길이
-# 리랭커도 LLM이라 입력이 길면 느려지고 한도에 걸린다.
-# 15 × 1200 = 18,000자 ≈ 9천 토큰 수준으로 맞춘다.
+                          # 리랭커도 LLM이라 입력이 길면 느려지고 한도에 걸린다.
+                          # 15 × 1200 = 18,000자 ≈ 9천 토큰 수준으로 맞춘다.
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -67,8 +67,7 @@ def call_reranker(query: str, items: list[tuple[str, str]], raw: bool = False):
     key = os.environ.get("CLOVA_API_KEY", "").strip()
     if not key:
         raise SystemExit("CLOVA_API_KEY가 .env에 없습니다.")
-    headers = {"Authorization": f"Bearer {key}",
-               "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     rid = os.environ.get("CLOVA_RERANK_REQUEST_ID", "").strip()
     if rid:
         headers["X-NCP-CLOVASTUDIO-REQUEST-ID"] = rid
@@ -132,8 +131,7 @@ def parse_rerank(js: dict, ids: list[str]) -> list[str] | None:
         for cid in ids:                      # 등장 순서대로 훑는다
             pos = txt.find(cid)
             if pos >= 0 and cid not in seen:
-                seen.add(cid)
-                out.append((pos, cid))
+                seen.add(cid); out.append((pos, cid))
         if out:
             return [cid for _, cid in sorted(out)]
     return None
@@ -168,11 +166,9 @@ def build_bm25(chunks_path: Path, cache_path: Path):
         with cache_path.open("rb") as f:
             return pickle.load(f)
     print("BM25 인덱스 생성 중… (최초 1회, 이후 캐시 사용)", file=sys.stderr)
-    rows = [json.loads(l)
-            for l in chunks_path.open(encoding="utf-8") if l.strip()]
+    rows = [json.loads(l) for l in chunks_path.open(encoding="utf-8") if l.strip()]
     bm25 = BM25Okapi([tokenize(r["text"]) for r in rows])
-    meta = [{k: v for k, v in r.items() if k != "text"} | {"text": r["text"]}
-            for r in rows]
+    meta = [{k: v for k, v in r.items() if k != "text"} | {"text": r["text"]} for r in rows]
     obj = (bm25, meta)
     with cache_path.open("wb") as f:
         pickle.dump(obj, f)
@@ -298,8 +294,7 @@ def main() -> None:
     fused = fused_all[:a.k]
 
     if a.json:
-        out = [{"chunk_id": cid, "rrf_sources": src, **store[cid]}
-               for cid, src in fused]
+        out = [{"chunk_id": cid, "rrf_sources": src, **store[cid]} for cid, src in fused]
         print(json.dumps(out, ensure_ascii=False, indent=2))
         return
 
@@ -321,8 +316,7 @@ def main() -> None:
               + (f" · 기준일 {d['base_date']}" if d.get("base_date") else "")
               + f"   ({src_s})")
         body = d["text"]
-        print("   " + (body[:400] + "…" if len(body)
-              > 400 else body).replace("\n", "\n   "))
+        print("   " + (body[:400] + "…" if len(body) > 400 else body).replace("\n", "\n   "))
     print()
 
 

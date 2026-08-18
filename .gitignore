@@ -3,29 +3,34 @@
 *.pem
 *.key
 
+# ── 원본 문서 (저작권·용량) ───────────────────────────────
+# macOS 파일명이 NFD로 저장돼 한글 패턴이 안 맞는 경우가 있어
+# 인코딩과 무관한 "0." 접두어로 막습니다.
+0.*/
+*투자설명서*/
+*docs_renamed*/
+ncp_data_test/
+
 # ── 재생성 가능한 산출물 ──────────────────────────────────
-# chunks.jsonl / chunks_final.jsonl은 원본 문서에서 다시 만들 수 있고
-# 크기가 크므로(수십 MB) 깃에 넣지 않습니다.
 dataset/chunks.jsonl
 dataset/chunks_final.jsonl
 dataset/docs/
 dataset/chroma/
 dataset/bm25.pkl
+dataset/fund_fees.sqlite
+dataset/emb_cache.sqlite
+dataset/emb_cache.sqlite-*
 
 # manifest.csv는 품질 점검 기록이라 커밋해두면 유용합니다.
 !dataset/manifest.csv
 
-# ⚠️ emb_cache.sqlite는 판단이 필요합니다.
-#    API 비용이 실제로 들어간 결과물이라 날리면 다시 돈과 시간이 듭니다.
-#    깃에 넣기엔 크니(수십~수백 MB) 팀 공유 스토리지나 Git LFS를 쓰세요.
-dataset/emb_cache.sqlite
-dataset/emb_cache.sqlite-*
-
-# ── 원본 문서 ────────────────────────────────────────────
-# 저작권·용량 문제로 보통 깃에 넣지 않습니다. 팀 스토리지에 두세요.
-docs/
-투자설명서*/
-docs_renamed*/
+# ── 평가 실행 결과 (매번 달라짐) ──────────────────────────
+base.json
+round*.json
+v1_run*.json
+v2_run*.json
+*.zip
+*.log
 
 # ── 파이썬 ───────────────────────────────────────────────
 venv/
@@ -34,5 +39,6 @@ __pycache__/
 *.py[cod]
 .ipynb_checkpoints/
 
-# ── OS ───────────────────────────────────────────────────
+# ── OS / 임시 ────────────────────────────────────────────
 .DS_Store
+_to_delete/

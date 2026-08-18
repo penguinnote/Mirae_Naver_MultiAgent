@@ -1,0 +1,785 @@
+{
+  "version": "v1",
+  "created": "2026-08-17",
+  "n_questions": 40,
+  "note": "권인근님 6개 질의 유형 + 투자설명서 유형 1개. answer_points는 자동 1차 채점용 문자열이며 최종 판단은 사람이 한다.",
+  "questions": [
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-001",
+      "question": "연금저축이랑 IRP 다 합쳐서 세액공제 얼마까지 받을 수 있나요?",
+      "query_type": "세제",
+      "difficulty": "하",
+      "engine": "hybrid",
+      "answer_points": [
+        "900만원",
+        "600만원"
+      ],
+      "expected_chunks": [
+        "doc6_p1_0000",
+        "doc41_p1_0000",
+        "doc27_p6_0020"
+      ],
+      "expected_sql": null,
+      "trap": "연금저축 단독 한도(600만원)와 합산 한도(900만원)를 섞어서 답하면 오답",
+      "source_doc": "doc6(개인IRP 부담금 입금), doc41"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-002",
+      "question": "연금계좌에 1년에 최대 얼마까지 넣을 수 있나요?",
+      "query_type": "세제",
+      "difficulty": "하",
+      "engine": "vector",
+      "answer_points": [
+        "1,800만원"
+      ],
+      "expected_chunks": [
+        "doc14_p1_0001",
+        "doc23_p1_0000"
+      ],
+      "expected_sql": null,
+      "trap": "납입한도(1,800만원)와 세액공제 한도(900만원)를 혼동하는 것이 전형적 오답",
+      "source_doc": "doc14(IRP), doc23(ISA 전환)"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-003",
+      "question": "총급여 6천만원인 직장인인데 연금저축 세액공제율이 몇 %인가요?",
+      "query_type": "세제",
+      "difficulty": "중",
+      "engine": "hybrid",
+      "answer_points": [
+        "13.2"
+      ],
+      "expected_chunks": [
+        "doc41_p1_0000"
+      ],
+      "expected_sql": null,
+      "trap": "5,500만원 초과 구간이므로 13.2%. 16.5%로 답하면 오답",
+      "source_doc": "doc41(세액공제율 표)"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-004",
+      "question": "ISA 만기자금을 연금계좌로 옮기면 세액공제를 추가로 받을 수 있나요?",
+      "query_type": "세제",
+      "difficulty": "중",
+      "engine": "vector",
+      "answer_points": [
+        "300만원",
+        "60일",
+        "추가 세액공제"
+      ],
+      "expected_chunks": [
+        "doc23_p1_0000",
+        "doc6_p1_0005"
+      ],
+      "expected_sql": null,
+      "trap": "이체금액의 10%를 300만원 한도로. '전액 공제'로 답하면 오답",
+      "source_doc": "doc23(ISA 만기자금 전환납입)"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-005",
+      "question": "ISA 만기자금 3천만원을 연금저축으로 옮기면 그 해 세액공제 대상 납입액은 최대 얼마가 되나요?",
+      "query_type": "세제",
+      "difficulty": "상",
+      "engine": "hybrid",
+      "answer_points": [
+        "1,200만원",
+        "300만원",
+        "900만원"
+      ],
+      "expected_chunks": [
+        "doc23_p1_0000"
+      ],
+      "expected_sql": null,
+      "trap": "900만원(기본) + 300만원(ISA 추가) = 1,200만원. 계산을 요구하는 복합 문항",
+      "source_doc": "doc23"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-006",
+      "question": "IRP에 넣은 돈은 세액공제를 안 받았어도 나중에 꺼낼 때 세금을 내나요?",
+      "query_type": "세제",
+      "difficulty": "상",
+      "engine": "vector",
+      "answer_points": [
+        "세액공제",
+        "과세제외"
+      ],
+      "expected_chunks": [
+        "doc5_p1_0000",
+        "doc19_p1_0000"
+      ],
+      "expected_sql": null,
+      "trap": "세액공제 받지 않은 납입액은 과세제외. 인출 순서 개념까지 답하면 우수",
+      "source_doc": "doc5(중도인출 및 계좌해지), doc19(과세재원확정)"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-007",
+      "question": "만 72세에 연금을 받으면 세율이 몇 % 적용되나요?",
+      "query_type": "과세·세율",
+      "difficulty": "중",
+      "engine": "sql",
+      "answer_points": [
+        "4.4"
+      ],
+      "expected_chunks": [
+        "doc5_p1_0000",
+        "doc21_p1_0000"
+      ],
+      "expected_sql": "SELECT tax_rate FROM pension_age_tax_rates WHERE 72 BETWEEN min_age AND max_age",
+      "trap": "70세 미만 5.5% / 70~80세 4.4% / 80세 이상 3.3%. 구간 경계를 틀리기 쉬움",
+      "source_doc": "doc5, doc21(IRP 연금지급)"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-008",
+      "question": "연금 수령할 때 나이에 따라 세율이 어떻게 달라지나요?",
+      "query_type": "과세·세율",
+      "difficulty": "하",
+      "engine": "sql",
+      "answer_points": [
+        "5.5",
+        "4.4",
+        "3.3"
+      ],
+      "expected_chunks": [
+        "doc5_p1_0000",
+        "doc21_p1_0000"
+      ],
+      "expected_sql": "SELECT age_category, tax_rate FROM pension_age_tax_rates ORDER BY min_age",
+      "trap": "세 구간을 모두 나열해야 정답",
+      "source_doc": "doc5, doc21"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-009",
+      "question": "연금저축을 중도인출하면 세금이 얼마나 나오나요?",
+      "query_type": "과세·세율",
+      "difficulty": "중",
+      "engine": "hybrid",
+      "answer_points": [
+        "16.5",
+        "기타소득세"
+      ],
+      "expected_chunks": [
+        "doc5_p1_0000",
+        "doc20_p1_0001",
+        "doc21_p1_0000"
+      ],
+      "expected_sql": null,
+      "trap": "부득이한 사유면 연금소득세 5.5~3.3%, 아니면 기타소득세 16.5%. 조건 분기 없이 하나만 답하면 감점",
+      "source_doc": "doc5, doc20(중도인출과 세금)"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-010",
+      "question": "무주택자가 집 사려고 IRP에서 중도인출하면 저율과세 되나요?",
+      "query_type": "과세·세율",
+      "difficulty": "상",
+      "engine": "hybrid",
+      "answer_points": [
+        "16.5",
+        "부득이한 사유"
+      ],
+      "expected_chunks": [
+        "doc20_p1_0001"
+      ],
+      "expected_sql": null,
+      "trap": "근퇴법상 중도인출 사유이지만 소득세법상 '부득이한 사유'는 아니어서 16.5% 기타소득세. 두 법의 사유가 다르다는 걸 모르면 반드시 틀림",
+      "source_doc": "doc20"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-011",
+      "question": "퇴직금을 연금으로 나눠 받으면 퇴직소득세가 얼마나 줄어드나요?",
+      "query_type": "과세·세율",
+      "difficulty": "중",
+      "engine": "vector",
+      "answer_points": [
+        "이연퇴직소득세|퇴직소득세",
+        "70%|30% 감면|30%"
+      ],
+      "expected_chunks": [
+        "doc21_p1_0000",
+        "doc38_p1_0001",
+        "doc5_p1_0000"
+      ],
+      "expected_sql": null,
+      "trap": "실제수령연차 10년 이하 70%, 10년 초과 60%, 20년 초과 50%",
+      "source_doc": "doc21, doc38"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-012",
+      "question": "연금소득이 연간 얼마를 넘으면 종합과세 대상이 되나요?",
+      "query_type": "과세·세율",
+      "difficulty": "중",
+      "engine": "vector",
+      "answer_points": [
+        "1,500만원"
+      ],
+      "expected_chunks": [
+        "doc21_p1_0001",
+        "doc20_p1_0001"
+      ],
+      "expected_sql": null,
+      "trap": "1,500만원 초과 시 분리과세/종합과세 선택. '무조건 종합과세'로 답하면 오답",
+      "source_doc": "doc21"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-013",
+      "question": "총보수가 0.5% 이하인 연금 펀드 목록을 알려주세요.",
+      "query_type": "상품 필터링",
+      "difficulty": "중",
+      "engine": "sql",
+      "answer_points": [
+        "0.5"
+      ],
+      "expected_chunks": [],
+      "expected_sql": "SELECT fund_name, class_label, fee_total FROM fund_fees WHERE fee_total <= 0.5 ORDER BY fee_total",
+      "trap": "벡터 검색으로는 절대 못 푸는 수치 필터. SQL로 라우팅되는지가 핵심",
+      "source_doc": "fund_fees.sqlite (196행 해당)"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-014",
+      "question": "퇴직연금 계좌로 가입할 수 있는 펀드 중에 총보수가 가장 싼 게 뭔가요?",
+      "query_type": "상품 필터링",
+      "difficulty": "중",
+      "engine": "sql",
+      "answer_points": [
+        "NH-Amundi",
+        "0.15"
+      ],
+      "expected_chunks": [],
+      "expected_sql": "SELECT fund_name, class_label, fee_total FROM fund_fees WHERE account_type='퇴직연금' ORDER BY fee_total LIMIT 1",
+      "trap": "정렬+필터 동시 요구. 계좌유형 필터를 빠뜨리면 다른 펀드가 나옴",
+      "source_doc": "fund_fees.sqlite"
+    },
+    {
+      "engine_only": true,
+      "wrong_markers": [],
+      "question_id": "Q-015",
+      "question": "온라인으로 가입하면 퇴직연금 펀드 수수료가 얼마나 저렴해지나요?",
+      "query_type": "상품 필터링",
+      "difficulty": "상",
+      "engine": "sql",
+      "answer_points": [
+        "온라인",
+        "오프라인"
+      ],
+      "expected_chunks": [],
+      "expected_sql": "SELECT channel, ROUND(AVG(fee_total),3) FROM fund_fees WHERE account_type='퇴직연금' GROUP BY channel",
+      "trap": "집계(AVG) + 그룹핑. 개별 펀드 하나만 답하면 질문에 안 맞음",
+      "source_doc": "fund_fees.sqlite"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-016",
+      "question": "미래에셋장기성장포커스증권자투자신탁1호는 연금저축이랑 퇴직연금 중에 어느 쪽이 보수가 더 싼가요?",
+      "query_type": "상품 필터링",
+      "difficulty": "상",
+      "engine": "hybrid",
+      "answer_points": [
+        "1.41",
+        "1.57"
+      ],
+      "expected_chunks": [
+        "KR510902511M_p3_0007"
+      ],
+      "expected_sql": "SELECT account_type, class_code, fee_total FROM fund_fees WHERE fund_code='KR510902511M' AND account_type IS NOT NULL",
+      "trap": "같은 펀드 안에서 C-P(연금저축 1.57%) vs C-P2(퇴직연금 1.41%) 비교. 클래스 체계를 이해해야 답할 수 있음",
+      "source_doc": "fund_fees.sqlite + KR510902511M 투자설명서 3쪽"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-017",
+      "question": "연금저축으로 가입할 수 있는 채권형 펀드 중 총보수 0.3% 이하인 것 있나요?",
+      "query_type": "상품 필터링",
+      "difficulty": "상",
+      "engine": "sql",
+      "answer_points": [
+        "한화내일받는단기국공채",
+        "0.207"
+      ],
+      "expected_chunks": [],
+      "expected_sql": "SELECT fund_name, class_code, fee_total FROM fund_fees WHERE account_type='연금저축' AND fee_total<=0.3 ORDER BY fee_total",
+      "trap": "계좌유형 + 수치 조건 동시 적용. 채권형 여부는 펀드명으로 판단해야 함",
+      "source_doc": "fund_fees.sqlite"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-018",
+      "question": "퇴직연금도 압류될 수 있나요?",
+      "query_type": "법적 권리·압류",
+      "difficulty": "하",
+      "engine": "hybrid",
+      "answer_points": [
+        "압류",
+        "금지"
+      ],
+      "expected_chunks": [
+        "doc16_p1_0000"
+      ],
+      "expected_sql": "SELECT asset_type, is_seizable, legal_basis FROM pension_seizure_rules",
+      "trap": "퇴직연금(DB/DC/IRP)은 전액 압류 금지. 근거 법령까지 대면 우수",
+      "source_doc": "doc16(퇴직연금과 압류)"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-019",
+      "question": "임원 퇴직금도 압류가 금지되나요?",
+      "query_type": "법적 권리·압류",
+      "difficulty": "중",
+      "engine": "hybrid",
+      "answer_points": [
+        "임원",
+        "1/2"
+      ],
+      "expected_chunks": [
+        "doc16_p1_0000",
+        "doc16_p2_0002"
+      ],
+      "expected_sql": "SELECT is_seizable, seizure_ratio, legal_basis FROM pension_seizure_rules WHERE asset_type LIKE '%임원%'",
+      "trap": "임원은 근퇴법 적용 대상이 아니라 민사집행법에 따라 1/2까지 압류 가능. '전액 금지'로 답하면 오답",
+      "source_doc": "doc16"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-020",
+      "question": "DC 계좌에 제가 추가로 넣은 돈도 압류 금지 대상인가요?",
+      "query_type": "법적 권리·압류",
+      "difficulty": "중",
+      "engine": "vector",
+      "answer_points": [
+        "추가 납입",
+        "압류 금지"
+      ],
+      "expected_chunks": [
+        "doc16_p1_0001"
+      ],
+      "expected_sql": null,
+      "trap": "부담금 납입 주체와 무관하게 전액 압류 금지. 개인 납입분은 예외라고 답하면 오답",
+      "source_doc": "doc16"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-021",
+      "question": "퇴직금을 IRP로 옮기면 압류를 피할 수 있나요?",
+      "query_type": "법적 권리·압류",
+      "difficulty": "상",
+      "engine": "vector",
+      "answer_points": [
+        "IRP",
+        "압류",
+        "금지"
+      ],
+      "expected_chunks": [
+        "doc16_p2_0002"
+      ],
+      "expected_sql": null,
+      "trap": "2022년 4월 14일 이후 퇴직분은 IRP 이전 시 전액 압류 금지. 일반 퇴직금은 1/2만 금지되므로 이전 여부에 따라 결론이 달라짐",
+      "source_doc": "doc16"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-022",
+      "question": "DB랑 DC 퇴직연금은 뭐가 다른가요?",
+      "query_type": "제도 비교",
+      "difficulty": "하",
+      "engine": "vector",
+      "answer_points": [
+        "확정급여형",
+        "확정기여형"
+      ],
+      "expected_chunks": [
+        "doc10_p1_0000",
+        "doc11_p1_0000"
+      ],
+      "expected_sql": null,
+      "trap": "운용 주체(회사 vs 근로자)와 퇴직급여 확정 여부가 핵심 차이",
+      "source_doc": "doc10(퇴직연금 가입대상), doc11(퇴직연금제도 기본)"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-023",
+      "question": "퇴직금제도랑 퇴직연금제도는 어떻게 다른가요?",
+      "query_type": "제도 비교",
+      "difficulty": "하",
+      "engine": "vector",
+      "answer_points": [
+        "금융기관에 적립",
+        "퇴직금제도"
+      ],
+      "expected_chunks": [
+        "doc11_p1_0000"
+      ],
+      "expected_sql": null,
+      "trap": "퇴직금은 회사가 직접 지급, 퇴직연금은 금융기관에 미리 적립 후 지급",
+      "source_doc": "doc11"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-024",
+      "question": "연금저축이랑 IRP는 중도인출 조건이 다른가요?",
+      "query_type": "제도 비교",
+      "difficulty": "중",
+      "engine": "vector",
+      "answer_points": [
+        "근퇴법|근로자퇴직급여보장법",
+        "중도인출 사유가 다르|조건이 다릅니다|사유에 해당해야"
+      ],
+      "expected_chunks": [
+        "doc20_p1_0000"
+      ],
+      "expected_sql": null,
+      "trap": "연금저축은 사유 무관 언제든 인출 가능, IRP는 근퇴법상 법정사유에 한함. 이 차이를 못 잡으면 실무적으로 큰 오답",
+      "source_doc": "doc20"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-025",
+      "question": "퇴직연금에 가입하려면 어떤 조건을 만족해야 하나요?",
+      "query_type": "제도 비교",
+      "difficulty": "하",
+      "engine": "vector",
+      "answer_points": [
+        "15 시간",
+        "1 년 이상"
+      ],
+      "expected_chunks": [
+        "doc10_p1_0000"
+      ],
+      "expected_sql": null,
+      "trap": "주 평균 15시간 이상 + 1년 이상 계속근로",
+      "source_doc": "doc10"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-026",
+      "question": "IRP에서 위험자산에 투자할 수 있는 한도가 얼마인가요?",
+      "query_type": "제도 비교",
+      "difficulty": "중",
+      "engine": "vector",
+      "answer_points": [
+        "70%"
+      ],
+      "expected_chunks": [
+        "doc14_p1_0001",
+        "doc27_p6_0019"
+      ],
+      "expected_sql": null,
+      "trap": "적립금의 70% 이내. 100%로 답하거나 집중투자한도와 혼동하면 오답",
+      "source_doc": "doc14(IRP), doc27"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-027",
+      "question": "IRP에 돈을 넣는 방법에는 뭐가 있나요?",
+      "query_type": "제도 비교",
+      "difficulty": "중",
+      "engine": "vector",
+      "answer_points": [
+        "개인부담금|본인 부담금|본인이 납입",
+        "1,800만원"
+      ],
+      "expected_chunks": [
+        "doc14_p1_0001"
+      ],
+      "expected_sql": null,
+      "trap": "퇴직급여 이전(의무) + 개인부담금(연 1,800만원 한도) 두 가지",
+      "source_doc": "doc14"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-028",
+      "question": "명예퇴직금을 IRP에 넣으려면 언제까지 해야 하나요?",
+      "query_type": "제도 비교",
+      "difficulty": "중",
+      "engine": "vector",
+      "answer_points": [
+        "60일"
+      ],
+      "expected_chunks": [
+        "doc14_p1_0001"
+      ],
+      "expected_sql": null,
+      "trap": "지급받은 시점부터 60일 이내",
+      "source_doc": "doc14"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-029",
+      "question": "명예퇴직하는 교사인데 명퇴수당을 연금계좌에 넣으면 절세가 되나요?",
+      "query_type": "절세·복합",
+      "difficulty": "상",
+      "engine": "hybrid",
+      "answer_points": [
+        "60일",
+        "퇴직소득세"
+      ],
+      "expected_chunks": [
+        "doc14_p1_0001",
+        "doc21_p1_0000",
+        "doc26_p1_0001"
+      ],
+      "expected_sql": null,
+      "trap": "60일 이내 IRP 입금 → 퇴직소득세 과세이연 → 연금수령 시 70/60/50% 감면. 3단계를 모두 연결해야 완전한 답",
+      "source_doc": "doc14, doc21, doc26(공무원·교사 퇴직수당)"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [
+        "1억 원입니다",
+        "100,000,000 원",
+        "최대 1억"
+      ],
+      "question_id": "Q-030",
+      "question": "올해 55세인데 연금계좌 평가액이 1억이면 올해 얼마까지 연금으로 받을 수 있나요?",
+      "query_type": "절세·복합",
+      "difficulty": "상",
+      "engine": "hybrid",
+      "answer_points": [
+        "연금수령한도",
+        "120%"
+      ],
+      "expected_chunks": [
+        "doc2_p1_0001",
+        "doc21_p1_0001",
+        "doc39_p1_0000"
+      ],
+      "expected_sql": null,
+      "trap": "연금수령한도 = 평가액/(11-연금수령연차)×120%. 1년차면 1억/10×1.2 = 1,200만원. ⚠️ 실측에서 LLM이 ×120%를 ×(11-연차)로 잘못 적용해 '1억'이라 답한 사례가 있다. 8배 넘게 틀린 값이다. 프롬프트로 고칠 문제가 아니라 Calculator 노드가 필요하다",
+      "source_doc": "doc2(연금 지급 업무), doc39(연금수령한도 안내)"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-031",
+      "question": "연금수령한도를 넘겨서 인출하면 어떻게 되나요?",
+      "query_type": "절세·복합",
+      "difficulty": "상",
+      "engine": "vector",
+      "answer_points": [
+        "연금외수령"
+      ],
+      "expected_chunks": [
+        "doc2_p1_0001",
+        "doc21_p1_0001"
+      ],
+      "expected_sql": null,
+      "trap": "한도 초과분은 연금외수령으로 과세(기타소득세 16.5% 또는 퇴직소득세)",
+      "source_doc": "doc2, doc21"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [
+        "아직 시행",
+        "시행 전",
+        "예정입니다",
+        "적용되지 않"
+      ],
+      "question_id": "Q-032",
+      "question": "퇴직연금 계좌를 다른 증권사로 옮길 때 갖고 있던 펀드를 팔지 않아도 되나요?",
+      "query_type": "절세·복합",
+      "difficulty": "상",
+      "engine": "vector",
+      "answer_points": [
+        "실물이전",
+        "2024년 10월 31일"
+      ],
+      "expected_chunks": [
+        "doc35_p1_0000"
+      ],
+      "expected_sql": null,
+      "trap": "2024.10.31 시행된 실물이전 제도. 오늘 기준으로 이미 시행 중인데 문서 시제 때문에 '예정'이라고 답하면 오답 (시점 판단 함정)",
+      "source_doc": "doc35(실물이전제도)"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-033",
+      "question": "실물이전으로 옮길 수 없는 상품에는 뭐가 있나요?",
+      "query_type": "절세·복합",
+      "difficulty": "중",
+      "engine": "vector",
+      "answer_points": [
+        "디폴트옵션",
+        "리츠"
+      ],
+      "expected_chunks": [
+        "doc35_p1_0000"
+      ],
+      "expected_sql": null,
+      "trap": "디폴트옵션상품·지분증권·리츠·사모펀드·ELF·RP·MMF 등이 제외 대상",
+      "source_doc": "doc35"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-034",
+      "question": "IRP를 연금저축으로 옮기려면 조건이 있나요?",
+      "query_type": "절세·복합",
+      "difficulty": "상",
+      "engine": "vector",
+      "answer_points": [
+        "55세 이상",
+        "5년 경과"
+      ],
+      "expected_chunks": [
+        "doc22_p3_0001"
+      ],
+      "expected_sql": null,
+      "trap": "만 55세 이상 + 가입 5년 경과 + 전액 이체. 실물이전 불가(현금이전만). 단 이연퇴직소득 있으면 5년 미경과도 허용",
+      "source_doc": "doc22"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-035",
+      "question": "회사가 DC 부담금을 제때 안 넣으면 어떻게 되나요?",
+      "query_type": "절세·복합",
+      "difficulty": "중",
+      "engine": "vector",
+      "answer_points": [
+        "지연이자"
+      ],
+      "expected_chunks": [
+        "doc17_p1_0000",
+        "doc18_p1_0001"
+      ],
+      "expected_sql": null,
+      "trap": "지연이자 발생 + 법적 처벌 가능. 납입기일 개념까지 답하면 우수",
+      "source_doc": "doc17(DC 지연이자)"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-036",
+      "question": "퇴직연금규약을 안 지키면 회사에 어떤 불이익이 있나요?",
+      "query_type": "절세·복합",
+      "difficulty": "중",
+      "engine": "vector",
+      "answer_points": [
+        "500만원",
+        "과태료"
+      ],
+      "expected_chunks": [
+        "doc12_p2_0001"
+      ],
+      "expected_sql": null,
+      "trap": "시정명령 후 미이행 시 500만원 이하 과태료",
+      "source_doc": "doc12(퇴직연금규약)"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-037",
+      "question": "미래에셋장기성장포커스증권자투자신탁1호의 투자위험등급은 몇 등급인가요?",
+      "query_type": "투자설명서",
+      "difficulty": "하",
+      "engine": "vector",
+      "answer_points": [
+        "1등급"
+      ],
+      "expected_chunks": [
+        "KR510902511M_p1_0000",
+        "KR510902511M_p1_0002"
+      ],
+      "expected_sql": null,
+      "trap": "1등급[매우 높은 위험]. 6단계 체계에서 1등급이 가장 위험하다는 점 주의",
+      "source_doc": "KR510902511M 투자설명서 1쪽"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-038",
+      "question": "펀드를 오후 3시 30분 전에 환매 신청하면 언제 돈을 받나요?",
+      "query_type": "투자설명서",
+      "difficulty": "중",
+      "engine": "vector",
+      "answer_points": [
+        "제2영업일",
+        "제4영업일"
+      ],
+      "expected_chunks": [
+        "KR510902511M_p22_0065"
+      ],
+      "expected_sql": null,
+      "trap": "15:30 이전 → 제2영업일 기준가 적용, 제4영업일 지급. 15:30 이후면 제3영업일 기준가",
+      "source_doc": "KR510902511M 투자설명서 22쪽"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-039",
+      "question": "종류C-P랑 종류C-P2는 뭐가 다른가요?",
+      "query_type": "투자설명서",
+      "difficulty": "중",
+      "engine": "hybrid",
+      "answer_points": [
+        "오프라인-개인연금|개인연금|연금저축계좌",
+        "오프라인-퇴직연금|퇴직연금"
+      ],
+      "expected_chunks": [
+        "KR510902511M_p9_0025",
+        "KR510902511M_p11_0029"
+      ],
+      "expected_sql": null,
+      "trap": "C-P는 개인연금(연금저축), C-P2는 퇴직연금. 뒤에 e가 붙으면 온라인. 이 체계를 모르면 수수료 질문에 전부 틀림",
+      "source_doc": "KR510902511M 투자설명서 9~11쪽"
+    },
+    {
+      "engine_only": false,
+      "wrong_markers": [],
+      "question_id": "Q-040",
+      "question": "펀드 환매를 거부당하거나 연기될 수도 있나요?",
+      "query_type": "투자설명서",
+      "difficulty": "상",
+      "engine": "vector",
+      "answer_points": [
+        "환매연기"
+      ],
+      "expected_chunks": [
+        "KR510902511M_p23_0068"
+      ],
+      "expected_sql": null,
+      "trap": "거래부진·시장 폐쇄·천재지변 등 사유 시 환매연기 가능. '항상 환매 가능'으로 답하면 오답",
+      "source_doc": "KR510902511M 투자설명서 23쪽"
+    }
+  ]
+}

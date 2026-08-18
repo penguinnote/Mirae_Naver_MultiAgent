@@ -1,0 +1,523 @@
+{
+  "version": "v2",
+  "created": "2026-08-18",
+  "source": "팀 제공 26문항 (과학기술인공제회 관련 다수)",
+  "n_questions": 26,
+  "note": "v1을 대체하지 않는다. v1은 '우리가 답할 수 있는 것'을 고른 셋이고, v2는 '밖에서 온 질문에 우리가 답할 수 있나'를 보는 커버리지 점검이다. coverage=none 문항은 못 맞히는 게 정상이며, 그럴듯한 답이 나오면 환각을 의심해야 한다.",
+  "questions": [
+    {
+      "question_id": "V-01",
+      "question": "퇴직연금제도란 무엇인가요?",
+      "query_type": "제도 비교",
+      "difficulty": "하",
+      "engine": "vector",
+      "coverage": "full",
+      "answer_points": [
+        "사외",
+        "적립"
+      ],
+      "expected_chunks": [
+        "doc10_p1_0000",
+        "doc11_p1_0000"
+      ],
+      "expected_sql": null,
+      "engine_only": false,
+      "wrong_markers": [],
+      "trap": "회사가 사외 금융기관에 적립했다가 퇴직 시 지급. 퇴직금제도와의 차이가 핵심",
+      "source_doc": "doc10, doc11"
+    },
+    {
+      "question_id": "V-02",
+      "question": "임원도 퇴직연금에 가입할 수 있나요?",
+      "query_type": "제도 비교",
+      "difficulty": "중",
+      "engine": "vector",
+      "coverage": "full",
+      "answer_points": [
+        "퇴직연금규약",
+        "임원만을 대상"
+      ],
+      "expected_chunks": [
+        "doc10_p1_0000",
+        "doc10_p1_0001"
+      ],
+      "expected_sql": null,
+      "engine_only": false,
+      "wrong_markers": [],
+      "trap": "가입 가능하지만 규약에 명시돼야 하고, 임원만을 대상으로는 운영 불가. 두 번째 조건을 빠뜨리기 쉽다",
+      "source_doc": "doc10"
+    },
+    {
+      "question_id": "V-05",
+      "question": "DB형 퇴직연금의 퇴직급여는 어떻게 계산하나요?",
+      "query_type": "제도 비교",
+      "difficulty": "하",
+      "engine": "vector",
+      "coverage": "full",
+      "answer_points": [
+        "평균임금",
+        "계속근로기간"
+      ],
+      "expected_chunks": [
+        "doc11_p1_0000",
+        "doc15_p1_0000"
+      ],
+      "expected_sql": null,
+      "engine_only": false,
+      "wrong_markers": [],
+      "trap": "퇴직급여 = 평균임금 × 계속근로기간. DC(부담금 누계액 ± 운용손익)와 혼동 주의",
+      "source_doc": "doc11, doc15"
+    },
+    {
+      "question_id": "V-06",
+      "question": "계속근로기간은 어떻게 계산하나요?",
+      "query_type": "제도 비교",
+      "difficulty": "중",
+      "engine": "vector",
+      "coverage": "partial",
+      "answer_points": [
+        "계속근로기간"
+      ],
+      "expected_chunks": [
+        "doc10_p3_0003",
+        "doc11_p1_0000"
+      ],
+      "expected_sql": null,
+      "engine_only": false,
+      "wrong_markers": [],
+      "trap": "법 조문에 '계속근로기간 1년 미만은 제외'가 나올 뿐, 산정 방법 자체를 설명한 대목은 없다. 부분 답변만 가능",
+      "source_doc": "doc10, doc11"
+    },
+    {
+      "question_id": "V-03",
+      "question": "DC 가입자가 퇴직할 때 회사에 미납 부담금이 있으면 언제까지 납입해야 하나요?",
+      "query_type": "절세·복합",
+      "difficulty": "중",
+      "engine": "vector",
+      "coverage": "full",
+      "answer_points": [
+        "지연이자",
+        "연장일|납입기일"
+      ],
+      "expected_chunks": [
+        "doc17_p1_0000",
+        "doc17_p1_0001"
+      ],
+      "expected_sql": null,
+      "engine_only": false,
+      "wrong_markers": [],
+      "trap": "납입기일+연장일이 기준이고 연장일 다음날부터 지연이자 발생. 규약에 명시된다는 점까지 답하면 우수",
+      "source_doc": "doc17"
+    },
+    {
+      "question_id": "V-04",
+      "question": "개인부담금은 반드시 납부해야 하나요? 개인부담요율은 변경할 수 있나요?",
+      "query_type": "제도 비교",
+      "difficulty": "중",
+      "engine": "vector",
+      "coverage": "full",
+      "answer_points": [
+        "필수가 아니|의무가 아니|선택",
+        "언제든 변경|언제든지 변경|변경 가능"
+      ],
+      "expected_chunks": [
+        "doc27_p2_0000"
+      ],
+      "expected_sql": null,
+      "engine_only": false,
+      "wrong_markers": [],
+      "trap": "납부는 필수가 아니고 요율은 언제든 변경 가능. 단 재직 기관 담당 부서를 통해야 한다는 단서가 있다",
+      "source_doc": "doc27"
+    },
+    {
+      "question_id": "V-07",
+      "question": "과거부담금과 장래부담금을 구분해서 운용지시할 수 있나요?",
+      "query_type": "제도 비교",
+      "difficulty": "중",
+      "engine": "vector",
+      "coverage": "full",
+      "answer_points": [
+        "구분하여 운용지시가 가능|구분하여 운용|구분해서 운용|가능합니다",
+        "기존퇴직금|기존 퇴직금|과거부담금"
+      ],
+      "expected_chunks": [
+        "doc27_p2_0001"
+      ],
+      "expected_sql": null,
+      "engine_only": false,
+      "wrong_markers": [],
+      "trap": "가능. 운용지시등록신청서의 '기존퇴직금 별도 투자비율'란에 지정",
+      "source_doc": "doc27"
+    },
+    {
+      "question_id": "V-17",
+      "question": "회원 개인부담금에는 어떤 세제 혜택이 있나요?",
+      "query_type": "세제",
+      "difficulty": "중",
+      "engine": "vector",
+      "coverage": "full",
+      "answer_points": [
+        "900만원",
+        "13.2"
+      ],
+      "expected_chunks": [
+        "doc27_p5_0014",
+        "doc27_p4_0011"
+      ],
+      "expected_sql": null,
+      "engine_only": false,
+      "wrong_markers": [],
+      "trap": "연 900만원 한도. 총급여 5,500만원 이하 16.5% / 초과 13.2%. '16.5'는 기타소득세율과 우연히 겹치고 '초과'는 '900만원 초과' 문맥에도 걸리므로 채점 기준에서 뺐다. 구간별 공제율을 이해했는지 가르는 건 13.2뿐이다",
+      "source_doc": "doc27"
+    },
+    {
+      "question_id": "V-08",
+      "question": "정기예금이 만기되면 자동으로 재예치되나요?",
+      "query_type": "제도 비교",
+      "difficulty": "중",
+      "engine": "vector",
+      "coverage": "full",
+      "answer_points": [
+        "재예치"
+      ],
+      "expected_chunks": [
+        "doc30_p1_0000",
+        "doc27_p6_0020"
+      ],
+      "expected_sql": null,
+      "engine_only": false,
+      "wrong_markers": [],
+      "trap": "일반 퇴직연금은 디폴트옵션 도입(2023.7.12)으로 자동 재예치 불가. 반면 과학기술인연금은 만기재예치가 유지된다. 제도별로 답이 갈리는 문항",
+      "source_doc": "doc27, doc30"
+    },
+    {
+      "question_id": "V-09",
+      "question": "사전지정운용방법(디폴트옵션)을 변경하면 현재 운용 중인 상품도 자동으로 변경되나요?",
+      "query_type": "제도 비교",
+      "difficulty": "중",
+      "engine": "vector",
+      "coverage": "partial",
+      "answer_points": [
+        "변경"
+      ],
+      "expected_chunks": [
+        "doc30_p1_0000",
+        "doc32_p8_0004"
+      ],
+      "expected_sql": null,
+      "engine_only": false,
+      "wrong_markers": [],
+      "trap": "'기존 보유 상품은 자동 변경되지 않는다'는 취지의 서술은 있으나 정면으로 답한 문장은 약하다",
+      "source_doc": "doc30, doc32"
+    },
+    {
+      "question_id": "V-10",
+      "question": "사전지정운용방법이 승인취소된 뒤 가입자가 별도로 운용지시하지 않으면 어떻게 되나요?",
+      "query_type": "제도 비교",
+      "difficulty": "상",
+      "engine": "vector",
+      "coverage": "none",
+      "answer_points": [],
+      "expected_chunks": [],
+      "expected_sql": null,
+      "engine_only": false,
+      "wrong_markers": [],
+      "trap": "⚠️ 코퍼스에 근거 없음. 디폴트옵션 '승인취소' 절차를 다룬 문서가 없다. 그럴듯한 답이 나오면 환각이다",
+      "source_doc": ""
+    },
+    {
+      "question_id": "V-25",
+      "question": "퇴직연금에서 어떤 경우를 상품의 '만기'로 보나요?",
+      "query_type": "제도 비교",
+      "difficulty": "중",
+      "engine": "vector",
+      "coverage": "none",
+      "answer_points": [],
+      "expected_chunks": [],
+      "expected_sql": null,
+      "engine_only": false,
+      "wrong_markers": [],
+      "trap": "⚠️ 근거 없음. '만기형 상품', '만기상환일' 표현은 있으나 만기의 정의는 없다",
+      "source_doc": ""
+    },
+    {
+      "question_id": "V-11",
+      "question": "개인형 퇴직연금제도(IRP)도 중도인출이 가능한가요?",
+      "query_type": "제도 비교",
+      "difficulty": "하",
+      "engine": "vector",
+      "coverage": "full",
+      "answer_points": [
+        "무주택",
+        "6개월 이상"
+      ],
+      "expected_chunks": [
+        "doc14_p1_0001",
+        "doc14_p2_0002"
+      ],
+      "expected_sql": null,
+      "engine_only": false,
+      "wrong_markers": [],
+      "trap": "법정 사유 충족 시 가능. 사유를 나열해야 한다",
+      "source_doc": "doc14"
+    },
+    {
+      "question_id": "V-12",
+      "question": "퇴직연금 중도인출은 어떻게 신청하고 어떤 서류를 제출해야 하나요?",
+      "query_type": "절세·복합",
+      "difficulty": "중",
+      "engine": "vector",
+      "coverage": "full",
+      "answer_points": [
+        "내점|영업점|방문",
+        "진단서|소견서|증빙"
+      ],
+      "expected_chunks": [
+        "doc22_p1_0000"
+      ],
+      "expected_sql": null,
+      "engine_only": false,
+      "wrong_markers": [],
+      "trap": "내점 신청이 원칙이고 사유별 징구서류가 다르다(진단서·가족관계증명서 등)",
+      "source_doc": "doc22"
+    },
+    {
+      "question_id": "V-13",
+      "question": "DC에서 중도인출한 일시금도 IRP로 입금할 수 있나요?",
+      "query_type": "제도 비교",
+      "difficulty": "하",
+      "engine": "vector",
+      "coverage": "full",
+      "answer_points": [
+        "IRP로 입금할 수 있|IRP에 입금|입금할 수 있습니다"
+      ],
+      "expected_chunks": [
+        "doc14_p2_0002"
+      ],
+      "expected_sql": null,
+      "engine_only": false,
+      "wrong_markers": [],
+      "trap": "가능하다고 명시돼 있다",
+      "source_doc": "doc14"
+    },
+    {
+      "question_id": "V-14",
+      "question": "다른 금융기관의 퇴직연금을 과학기술인공제회 퇴직연금으로 이전할 수 있나요?",
+      "query_type": "절세·복합",
+      "difficulty": "상",
+      "engine": "vector",
+      "coverage": "full",
+      "answer_points": [
+        "이전이 불가능|이전 불가|제한되어|불가능합니다",
+        "근거법령이 다른|근거 법령|법령이 다르|법적 체계"
+      ],
+      "expected_chunks": [
+        "doc27_p3_0009"
+      ],
+      "expected_sql": null,
+      "engine_only": false,
+      "wrong_markers": [
+        "이전이 가능합니다",
+        "이전할 수 있습니다"
+      ],
+      "trap": "⚠️ 정답은 '불가능'이다. 근퇴법과 과학기술인공제회법으로 근거법령이 달라 상호 이전이 제한된다. 단 기관 보유 퇴직금은 이전 가능. '가능하다'고 답하기 쉬운 함정 문항",
+      "source_doc": "doc27"
+    },
+    {
+      "question_id": "V-15",
+      "question": "과학기술인공제회 퇴직연금을 연금으로 전환하면 어떤 이자율이 적용되나요?",
+      "query_type": "절세·복합",
+      "difficulty": "상",
+      "engine": "vector",
+      "coverage": "full",
+      "answer_points": [
+        "만기가 긴 운용 방법의 이자율|만기가 긴 운용방법|가장 만기가 긴"
+      ],
+      "expected_chunks": [
+        "doc27_p6_0020"
+      ],
+      "expected_sql": null,
+      "engine_only": false,
+      "wrong_markers": [],
+      "trap": "연금대기기간 동안 공제회 위탁운용, 제시된 운용방법 중 '가장 만기가 긴 운용방법의 이자율' 적용",
+      "source_doc": "doc27"
+    },
+    {
+      "question_id": "V-16",
+      "question": "연금수령 개시일을 변경할 수 있나요?",
+      "query_type": "절세·복합",
+      "difficulty": "중",
+      "engine": "vector",
+      "coverage": "partial",
+      "answer_points": [
+        "개시"
+      ],
+      "expected_chunks": [
+        "doc2_p1_0001",
+        "doc2_p2_0003",
+        "doc27_p2_0000"
+      ],
+      "expected_sql": null,
+      "engine_only": false,
+      "wrong_markers": [],
+      "trap": "'개시 취소는 신청 당일만 가능', '연금개시일 = 최초 개시 신청일' 서술은 있으나 개시일 자체의 변경 가능 여부를 정면으로 답한 대목은 약하다. 과학기술인연금의 수령기간 변경(5년 단위)과 혼동 주의",
+      "source_doc": "doc2, doc27"
+    },
+    {
+      "question_id": "V-18",
+      "question": "ISA 만기자금을 연금계좌로 전환하면 세액공제를 얼마나 받을 수 있나요?",
+      "query_type": "세제",
+      "difficulty": "중",
+      "engine": "vector",
+      "coverage": "full",
+      "answer_points": [
+        "300만원",
+        "10%",
+        "60일"
+      ],
+      "expected_chunks": [
+        "doc23_p1_0000"
+      ],
+      "expected_sql": null,
+      "engine_only": false,
+      "wrong_markers": [],
+      "trap": "이체금액의 10%를 300만원 한도로 추가 공제. 만기 후 60일 이내",
+      "source_doc": "doc23"
+    },
+    {
+      "question_id": "V-19",
+      "question": "퇴직연금규약을 새로 만들거나 변경하려면 어떤 절차를 거쳐야 하나요?",
+      "query_type": "제도 비교",
+      "difficulty": "중",
+      "engine": "vector",
+      "coverage": "full",
+      "answer_points": [
+        "근로자대표|근로자 대표|과반수",
+        "동의",
+        "고용노동부|노동부 신고|신고"
+      ],
+      "expected_chunks": [
+        "doc12_p1_0000",
+        "doc12_p2_0001"
+      ],
+      "expected_sql": null,
+      "engine_only": false,
+      "wrong_markers": [],
+      "trap": "근로자대표 의견청취 또는 동의 → 고용노동부 신고. 불리한 변경은 '동의'가 필수라는 구분이 핵심",
+      "source_doc": "doc12"
+    },
+    {
+      "question_id": "V-20",
+      "question": "퇴직연금규약을 위반하면 어떤 제재를 받을 수 있나요?",
+      "query_type": "법적 권리·압류",
+      "difficulty": "중",
+      "engine": "vector",
+      "coverage": "full",
+      "answer_points": [
+        "500만원",
+        "과태료"
+      ],
+      "expected_chunks": [
+        "doc12_p2_0001"
+      ],
+      "expected_sql": null,
+      "engine_only": false,
+      "wrong_markers": [],
+      "trap": "시정명령 후 미이행 시 500만원 이하 과태료",
+      "source_doc": "doc12"
+    },
+    {
+      "question_id": "V-23",
+      "question": "퇴직연금도 압류될 수 있나요?",
+      "query_type": "법적 권리·압류",
+      "difficulty": "하",
+      "engine": "vector",
+      "coverage": "full",
+      "answer_points": [
+        "압류",
+        "금지"
+      ],
+      "expected_chunks": [
+        "doc16_p1_0000"
+      ],
+      "expected_sql": null,
+      "engine_only": false,
+      "wrong_markers": [],
+      "trap": "DB/DC/IRP는 전액 압류 금지. 근퇴법 제7조제1항",
+      "source_doc": "doc16"
+    },
+    {
+      "question_id": "V-24",
+      "question": "임원의 퇴직연금도 전액 압류가 금지되나요?",
+      "query_type": "법적 권리·압류",
+      "difficulty": "중",
+      "engine": "vector",
+      "coverage": "full",
+      "answer_points": [
+        "임원",
+        "1/2"
+      ],
+      "expected_chunks": [
+        "doc16_p1_0000",
+        "doc16_p2_0002"
+      ],
+      "expected_sql": null,
+      "engine_only": false,
+      "wrong_markers": [
+        "임원도 전액 압류가 금지",
+        "임원의 퇴직연금도 전액"
+      ],
+      "trap": "⚠️ 아니다. 임원은 근퇴법 적용 대상이 아니어서 민사집행법에 따라 1/2까지 압류 가능. '금지된다'고 답하기 쉬운 함정",
+      "source_doc": "doc16"
+    },
+    {
+      "question_id": "V-21",
+      "question": "과학기술인공제회 홈페이지 회원가입과 과학기술인연금 시스템 회원가입은 같은 건가요?",
+      "query_type": "시스템",
+      "difficulty": "중",
+      "engine": "vector",
+      "coverage": "none",
+      "answer_points": [],
+      "expected_chunks": [],
+      "expected_sql": null,
+      "engine_only": false,
+      "wrong_markers": [],
+      "trap": "⚠️ 근거 없음. 홈페이지 로그인 경로 언급은 있으나 두 회원가입의 관계를 설명한 대목이 없다",
+      "source_doc": ""
+    },
+    {
+      "question_id": "V-22",
+      "question": "과학기술인연금 시스템에는 어떻게 접속하고 로그인하나요?",
+      "query_type": "시스템",
+      "difficulty": "중",
+      "engine": "vector",
+      "coverage": "partial",
+      "answer_points": [
+        "sema|공제회 홈페이지|홈페이지"
+      ],
+      "expected_chunks": [
+        "doc27_p6_0019"
+      ],
+      "expected_sql": null,
+      "engine_only": false,
+      "wrong_markers": [],
+      "trap": "공제회 홈페이지(www.sema.or.kr) 로그인 후 '연금 > MY퇴직연금' 경로 언급은 있으나 접속·로그인 절차 자체를 설명하진 않는다",
+      "source_doc": "doc27"
+    },
+    {
+      "question_id": "V-26",
+      "question": "문자나 이메일이 반송되면 퇴직연금 관련 통지는 어떻게 하나요?",
+      "query_type": "시스템",
+      "difficulty": "중",
+      "engine": "vector",
+      "coverage": "none",
+      "answer_points": [],
+      "expected_chunks": [],
+      "expected_sql": null,
+      "engine_only": false,
+      "wrong_markers": [],
+      "trap": "⚠️ 근거 없음. '반송'은 담보융자 약정 불가 계좌 맥락에만 등장한다",
+      "source_doc": ""
+    }
+  ]
+}
