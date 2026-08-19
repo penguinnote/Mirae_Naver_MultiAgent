@@ -24,8 +24,8 @@
 | Fee-SQL 노드 | ✅ | 상품 필터링 5/5 통과 |
 | Calculator 노드 | ✅ | 연금수령한도 계산 오류 해결 |
 | 안전성 가드(PII·인젝션) | ✅ | 표준 거절 응답, 오탐 0건 |
-| FastAPI `/answer` | ⬜ 다음 작업 | |
-| NCP 배포 | ⬜ 미착수 | |
+| FastAPI `/answer` | ✅ 검증 완료 | 로컬 서버 경유 90.0%(36/40), 규격 통과, 회귀 없음 |
+| NCP 배포 | ⬜ 다음 작업 | `deploy/` 가이드 작성 완료 |
 
 세부 내역과 실패/성공 실험 기록은 프로젝트 문서(`claude/` 폴더 원본은 Claude 프로젝트에,
 로컬에는 `CLAUDE.md`)에 있습니다.
@@ -277,13 +277,45 @@ python eval_answers.py --endpoint http://IP/answer --evalset evalset_v1.json
 - `evalset_v1.json` (40문항) — 우리가 고른 질문, 근거 청크까지 매핑
 - `evalset_v2.json` (26문항) — 팀에서 받은 질문, 커버리지 점검용
 
+## 7단계: 평가 API 서버 (`server.py`, `deploy/`)
+
+`agent.py`의 `run()`을 대회 규격에 맞춰 FastAPI로 감쌌습니다.
+
+```
+GET /answer?question_id={id}&question={질의}
+→ {question_id, question, retrieved_context, think_trace, answer}  (전부 문자열)
+```
+
+- 기동 시(`@app.on_event("startup")`) `agent.warmup()`을 미리 불러 인덱스(BM25+Chroma)를
+  로딩해둔다 — 그래야 첫 요청이 20초쯤 손해보지 않는다.
+- `/answer` 처리 중 예외가 나도 500을 그대로 흘려보내지 않고, 규격에 맞는 5필드
+  JSON(빈 근거 + 오류 안내 답변)으로 응답한다. 평가 API는 5xx보다 "형식은 맞지만
+  내용이 빈 답"이 재시도 낭비가 적다.
+- `/health`는 우리가 생존 확인용으로만 쓰는 엔드포인트 — 평가 규격에는 없다.
+
+```bash
+source venv/bin/activate
+pip install -r requirements.txt
+uvicorn server:app --host 127.0.0.1 --port 8000
+
+# 다른 터미널에서 검증
+python eval_answers.py --endpoint http://127.0.0.1:8000/answer --evalset evalset_v1.json --show
+```
+
+실제 NCP 배포 절차(서버 준비 → systemd → nginx → 외부 검증)는 **`deploy/DEPLOY.md`에
+단계별로 정리**되어 있습니다. nginx 설정(`deploy/nginx.conf`)과 systemd 유닛
+(`deploy/agent-server.service`)도 함께 있습니다.
+
 ## 다음 단계
 
-1. **FastAPI `/answer` 서버** — 대회 규격(`GET /answer?question_id=&question=`,
-   헤더 없음, 5개 문자열 필드)에 맞춰 `agent.py`를 감싼다. (다음 작업)
-2. **NCP 배포** — 공인 IP, ACG 80포트 허용, nginx(`proxy_read_timeout 320s`),
-   systemd(`Restart=always`).
-3. **파인튜닝은 하지 않는다** — 문서 사실을 가중치에 넣지 않고, RAG로 근거를 준다.
+1. **로컬에서 `server.py` 실행 검증** — 위 6단계 커맨드로 기동 후
+   `eval_answers.py --endpoint`로 40문항 정답률이 `agent:answer_for_eval`
+   어댑터 결과(90.0%)와 같게 나오는지 확인. (다음 작업)
+2. **NCP 배포** — `deploy/DEPLOY.md` 따라 공인 IP, ACG 80포트 허용,
+   nginx(`proxy_read_timeout 320s`), systemd(`Restart=always`).
+3. **README 엔드포인트 기입** — 배포 검증 끝나면 이 문서 상단
+   `## 평가용 엔드포인트`에 실제 URL을 채운다.
+4. **파인튜닝은 하지 않는다** — 문서 사실을 가중치에 넣지 않고, RAG로 근거를 준다.
    대회 규정상 답변 생성 LLM은 HyperCLOVA 계열이어야 한다.
 
 ## 파일 구성
@@ -299,6 +331,10 @@ build_evalset.py      6단계  평가셋 v1 생성
 build_evalset_v2.py   6단계  평가셋 v2 생성
 eval_answers.py        6단계  답변 채점 (팀 공용)
 run_eval.py            6단계  검색 계층만 측정
+server.py               7단계  평가 API 서버 (FastAPI, agent.run() 래핑)
+deploy/nginx.conf       7단계  nginx 리버스 프록시 설정
+deploy/agent-server.service  7단계  systemd 서비스 유닛
+deploy/DEPLOY.md        7단계  NCP 배포 단계별 가이드
 ```
 
 ## 튜닝 포인트

@@ -24,8 +24,8 @@
 | 계열 펀드 비교 검색 | ✅ | "솔로몬 국공채" 4개 펀드 전부 커버 확인 |
 | SQL 결과 재정렬 안전장치 | ✅ | round5에서 Q-014 회귀 발견 → 수정 → round6 재통과 |
 | **v0 에이전트 (round6 최종)** | ✅ 안정화 | 정답률 90.0%(v1셋 40문항), 회귀 없음 |
-| FastAPI `/answer` | ⬜ 미착수 | |
-| NCP 배포 | ⬜ 미착수 | |
+| FastAPI `/answer` | ✅ 검증 완료 | 로컬 uvicorn 경유 90.0%(36/40), API 규격 점검 통과(5필드 문자열·200·JSON), 응답 평균 7.0초/최대 24.4초 |
+| NCP 배포 | ⬜ 다음 작업 | `deploy/nginx.conf`·`deploy/agent-server.service`·`deploy/DEPLOY.md` 작성 완료 |
 
 ---
 
@@ -45,6 +45,11 @@
 ├── eval_answers.py       ★ 답변 채점 (팀 공용, 표준 라이브러리만)
 ├── evalset_v1.json       40문항 (우리가 고른 질문)
 ├── evalset_v2.json       26문항 (팀에서 받은 질문, 커버리지 점검)
+├── server.py             ★ 평가 API 서버 (FastAPI, agent.run() 래핑)
+├── deploy/
+│   ├── nginx.conf             nginx 리버스 프록시 (80/443 → 127.0.0.1:8000)
+│   ├── agent-server.service   systemd 유닛 (Restart=always)
+│   └── DEPLOY.md              NCP 배포 단계별 가이드
 ├── .env                  API 키 (git 제외)
 └── dataset/
     ├── chunks_final.jsonl   14,745 청크
