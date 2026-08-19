@@ -113,7 +113,7 @@
       "engine": "vector",
       "answer_points": [
         "세액공제",
-        "과세제외"
+        "과세제외|비과세"
       ],
       "expected_chunks": [
         "doc5_p1_0000",

@@ -9,11 +9,14 @@
 
 구조
 ----
-    route  →  retrieve  →  [fee_sql]  →  compose  →  to_response
-   (판단)     (하이브리드)   (Text2SQL)    (HCX-007)    (평가 API 형식)
+    route  →  retrieve  →  [fee_sql]  →  [calc]  →  compose  →  to_response
+   (판단)     (하이브리드)   (Text2SQL)   (순수계산)   (HCX-007)    (평가 API 형식)
 
-    fee_sql은 route가 need_sql을 설정할 때만 실행된다.
-    수치 비교·정렬·집계 질문이 아니면 건너뛴다.
+    fee_sql은 route가 need_sql을 설정할 때만, calc는 need_calc를 설정할 때만
+    실행된다. 둘 다 조건에 안 걸리면 건너뛴다.
+    calc는 LLM을 쓰지 않는다 — 연금수령한도 계산에서 HCX-007이 8배 틀린 값을
+    낸 적이 있어서(×120%를 ×(11-연차)로 잘못 적용), 순수 파이썬으로 계산해
+    "이 값을 그대로 쓰라"고 넘긴다.
 
 노드를 함수로 나눴다. v1에서 LangGraph로 옮길 때 그대로 노드가 되도록
 입출력을 state 딕셔너리 하나로 통일해 뒀다. 지금 LangGraph를 쓰지 않는 이유는
@@ -218,14 +221,21 @@ FUND_CODE_RE = re.compile(r"\bKR\d{10}[A-Z0-9]?\b", re.I)
 # "총보수 0.5% 이하 펀드 목록" → need_sql=True
 # 판단은 규칙으로 한다. LLM 호출 1회를 아끼면 데드라인에 여유가 생긴다.
 SQL_COMPARE = ["이하", "이상", "미만", "초과", "넘는", "안 넘는", "안넘는",
-               "보다 싼", "보다 낮", "보다 높", "보다 비싼"]
+               "보다 싼", "보다 낮", "보다 높", "보다 비싼",
+               # "A랑 B 중에 어느 쪽이 더 싼가" 형태도 결국 수치 비교다
+               "더 싼", "더 저렴", "더 낮", "더 높", "더 비싼", "어느 쪽이"]
 SQL_SORT = ["가장 싼", "가장 비싼", "가장 낮은", "가장 높은", "가장 저렴",
-            "싼 순", "낮은 순", "높은 순", "비싼 순", "저렴한 순"]
+            "싼 순", "낮은 순", "높은 순", "비싼 순", "저렴한 순",
+            "제일 싼", "제일 낮은", "제일 저렴", "최저", "최고"]
+# fee_sql()이 SQL 결과를 재정렬할 때 방향을 정하는 데 쓴다 (최고 제외한 오름차순/내림차순)
+SQL_SORT_ASC = ["가장 싼", "가장 낮은", "가장 저렴", "싼 순", "낮은 순", "저렴한 순",
+                "제일 싼", "제일 낮은", "제일 저렴", "최저"]
+SQL_SORT_DESC = ["가장 비싼", "가장 높은", "비싼 순", "높은 순", "제일 비싼", "최고"]
 SQL_AGG = ["평균", "몇 개", "몇개", "총 몇", "얼마나 저렴", "얼마나 비싼",
            "얼마나 차이"]
 SQL_FIELD = ["총보수", "수수료", "보수", "판매보수", "판매수수료"]
 
-FUND_FEES_DB = "./dataset/fund_fees.sqlite"
+FUND_FEES_DB = str(Path(__file__).resolve().parent / "dataset" / "fund_fees.sqlite")
 
 
 def _needs_sql(question: str) -> bool:
@@ -239,6 +249,85 @@ def _needs_sql(question: str) -> bool:
     has_agg = any(a in low for a in SQL_AGG)
     return has_compare or has_sort or has_agg
 
+
+# ── 계산 라우팅 신호 ─────────────────────────────────────────────────
+# 연금수령한도처럼 정해진 공식이 있는 산수는 LLM에게 시키지 않는다.
+# evalset Q-030에서 HCX-007이 ×120%를 ×(11-연차)로 잘못 적용해
+# 8배 틀린 값을 낸 전례가 재현됐다(round1·round3 두 번 다 동일 오류).
+# 좁게만 켠다 — 미탐(계산 안 켜짐)은 그냥 검색 답변으로 대체되지만,
+# 오탐(엉뚱한 계산을 사실처럼 제시)은 훨씬 위험하다.
+_CALC_AMOUNT_RE = re.compile(r"\d+(?:[.,]\d+)?\s*(?:조|억|천만|백만|만)\s*원?")
+_CALC_AGE_OR_CAR_RE = re.compile(r"(?:만\s*)?\d{2}\s*세|\d+\s*년\s*차|\d+\s*년째")
+_CALC_TOPIC_WORDS = ["연금수령한도", "얼마까지", "얼마나 받을 수", "수령할 수 있는",
+                      "받을 수 있나요", "받을 수 있는지"]
+
+
+def _needs_calc(question: str) -> bool:
+    """연금수령한도 계산이 필요한 질문인지 규칙으로 판별한다.
+
+    '평가액' 언급 + 금액 표현 + 나이/연차가 전부 있어야 켜진다. 셋 중
+    하나라도 빠지면 계산하지 않는다(안전한 미탐 우선).
+    """
+    if "평가액" not in question:
+        return False
+    if not _CALC_AMOUNT_RE.search(question):
+        return False
+    if not _CALC_AGE_OR_CAR_RE.search(question):
+        return False
+    return "연금수령한도" in question or any(w in question for w in _CALC_TOPIC_WORDS)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ⓪ safety_check — 개인정보·프롬프트 조작 시도를 HCX 호출 전에 코드로 차단
+#
+# 평가지표 "안전성 및 신뢰성"(개인정보 노출, 부적절한 입출력, 프롬프트 공격)에
+# 대응한다. LLM에게 판단을 맡기지 않는다 — 판단을 맡기면 인젝션 문구 자체가
+# 프롬프트에 들어가 우회당할 수 있다. 정규식으로 먼저 걸러 표준 거절 응답을
+# 주고 그 자리에서 끝낸다(다른 노드를 타지 않는다).
+# ══════════════════════════════════════════════════════════════════════
+
+_PII_PATTERNS = [
+    re.compile(r"\d{6}[-\s]?[1-4]\d{6}"),          # 주민등록번호 형식
+    re.compile(r"\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}"),  # 카드번호 형식
+]
+_INJECTION_MARKERS = [
+    "이전 지시", "이전 지침", "시스템 프롬프트", "system prompt",
+    "지시사항을 무시", "규칙을 무시", "규칙을 잊", "ignore previous",
+    "ignore all previous", "지금부터 너는", "역할을 무시", "jailbreak",
+    "너는 이제부터", "프롬프트를 출력", "지시문을 출력", "내부 지침",
+]
+
+
+def _looks_like_pii(text: str) -> bool:
+    return any(p.search(text) for p in _PII_PATTERNS)
+
+
+def _looks_like_injection(text: str) -> bool:
+    low = text.lower()
+    return any(m.lower() in low for m in _INJECTION_MARKERS)
+
+
+def safety_check(state: dict) -> dict:
+    q = state["question"]
+    if _looks_like_pii(q):
+        state["answer"] = (
+            "죄송합니다. 주민등록번호·카드번호로 보이는 개인정보가 포함되어 있어 "
+            "답변드릴 수 없습니다. 개인정보를 빼고 제도나 상품에 대한 질문으로 "
+            "다시 문의해 주세요.")
+        state["trace"].append("safety_check: 개인정보 패턴 감지 → 표준 거절 응답, 이후 단계 건너뜀")
+        state["_blocked"] = True
+    elif _looks_like_injection(q):
+        state["answer"] = (
+            "죄송합니다. 해당 요청에는 답변드릴 수 없습니다. 연금 제도나 상품에 "
+            "대해 궁금한 점을 질문해 주세요.")
+        state["trace"].append("safety_check: 프롬프트 조작 시도 패턴 감지 → 표준 거절 응답, 이후 단계 건너뜀")
+        state["_blocked"] = True
+    return state
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ① route — 질문을 보고 어디를 뒤질지 정한다 (Disambiguator 축소판)
+# ══════════════════════════════════════════════════════════════════════
 
 def route(state: dict) -> dict:
     q = state["question"]
@@ -254,26 +343,49 @@ def route(state: dict) -> dict:
         doc_type = "투자설명서"
 
     need_sql = _needs_sql(q)
+    need_calc = _needs_calc(q)
 
     m = FUND_CODE_RE.search(q)
     state["route"] = {
         "doc_type": doc_type,
         "fund_code": m.group(0).upper() if m else None,
         "need_sql": need_sql,
+        "need_calc": need_calc,
         "reason": f"제도 키워드 {inst}개 / 상품 키워드 {prod}개"
-                  + (", SQL 필요" if need_sql else ""),
+                  + (", SQL 필요" if need_sql else "")
+                  + (", 계산 필요" if need_calc else ""),
     }
     state["trace"].append(
         f"route: {state['route']['reason']} → "
         f"doc_type={doc_type or '전체'}"
         + (f", fund={state['route']['fund_code']}" if m else "")
-        + (", need_sql=True" if need_sql else ""))
+        + (", need_sql=True" if need_sql else "")
+        + (", need_calc=True" if need_calc else ""))
     return state
 
 
 # ══════════════════════════════════════════════════════════════════════
 # ② retrieve — 하이브리드 검색 (벡터 + BM25 + RRF)
 # ══════════════════════════════════════════════════════════════════════
+
+# ── 같은 계열 펀드(단기/중장기/장기 등) 이름에서 공통 뿌리를 뽑는다 ─────────
+# "미래에셋솔로몬단기국공채증권자투자신탁1호(채권)"과 "…중장기…", "…장기…"는
+# 계열명("솔로몬국공채")이 같고 기간 수식어만 다르다. 이 뿌리가 같은 펀드가
+# 2개 이상이고 질문에 그 뿌리가 등장하면 "비교 질문"으로 본다.
+_FUND_VARIANT_WORDS = ["초단기", "중단기", "중장기", "초장기", "단기", "장기"]
+_FUND_SUFFIX_WORDS = ["증권자투자신탁", "증권투자신탁", "자투자신탁", "투자신탁", "증권"]
+
+
+def _fund_core(name: str) -> str:
+    """펀드명에서 기간 수식어·괄호·호수·상품유형 접미사를 제거해 계열 뿌리만 남긴다."""
+    core = re.sub(r"\(.*?\)", "", name or "")           # (채권)/(주식) 등 괄호 제거
+    core = re.sub(r"제?\d+호", "", core)                  # "1호"/"제1호" 제거
+    for w in _FUND_SUFFIX_WORDS:
+        core = core.replace(w, "")
+    for w in _FUND_VARIANT_WORDS:                        # 긴 것부터 — "중장기"가
+        core = core.replace(w, "")                        # "단기"보다 먼저 지워져야 한다
+    return core.strip()
+
 
 class Retriever:
     """인덱스를 한 번만 로드해서 재사용한다. 요청마다 로드하면 20초씩 날아간다."""
@@ -295,6 +407,83 @@ class Retriever:
         self.text_of = {m["chunk_id"]: m["text"] for m in self.meta}
         self.md_of = {m["chunk_id"]: m for m in self.meta}
 
+        # 펀드 비교 질문 감지용 색인 — fund_code별 청크 인덱스, 계열 뿌리별 그룹
+        self.chunks_by_fund: dict = {}
+        fund_names: dict = {}
+        for i, m in enumerate(self.meta):
+            fc = m.get("fund_code")
+            if not fc:
+                continue
+            self.chunks_by_fund.setdefault(fc, []).append(i)
+            fund_names.setdefault(fc, m.get("fund_name"))
+        self.fund_core_index: dict = {}
+        for fc, name in fund_names.items():
+            core = _fund_core(name).replace("미래에셋", "")
+            if len(core) >= 2:
+                self.fund_core_index.setdefault(core, []).append((fc, name))
+
+    def _detect_compare_funds(self, question: str):
+        """질문에 같은 계열(뿌리)의 펀드가 2개 이상 언급됐는지 찾는다.
+
+        예: "솔로몬 국공채 단기·중장기·장기, 뭐가 달라요?" → 뿌리 "솔로몬국공채"
+        아래 3개 fund_code가 전부 걸린다. 하나도 안 걸리면 None.
+        """
+        norm = re.sub(r"[\s·,/]", "", question)
+        best = None
+        for core, funds in self.fund_core_index.items():
+            if len(funds) < 2:
+                continue
+            if core and core in norm:
+                if best is None or len(funds) > len(best):
+                    best = funds
+        return best
+
+    def _fund_evidence(self, query_emb, question: str, fund_code: str, k: int) -> list:
+        """한 펀드로 범위를 좁혀 벡터+BM25를 각각 돌리고 합친다.
+
+        전체 풀(POOL=60)로 한 번에 검색하면 계열 펀드들의 청크가 서로 거의
+        동일해서(법정 문구 공유) 상위 슬롯을 한두 펀드가 다 차지하고 나머지는
+        通 밀려난다. 펀드별로 따로 뽑아야 전부 근거에 들어간다.
+        """
+        idxs = self.chunks_by_fund.get(fund_code, [])
+        if not idxs:
+            return []
+
+        picked: dict[str, dict] = {}
+        try:
+            res = self.col.query(query_embeddings=[query_emb], n_results=k,
+                                  where={"fund_code": fund_code},
+                                  include=["metadatas"])
+            for i, cid in enumerate(res["ids"][0]):
+                picked.setdefault(cid, {})["vec"] = i + 1
+        except Exception:                                  # noqa: BLE001
+            pass  # Chroma where 필터가 안 먹으면 BM25만으로도 충분하다
+
+        scores = self.bm25.get_scores(tokenize(question))
+        ranked = sorted(idxs, key=lambda i: -scores[i])[:k]
+        for rank, i in enumerate(ranked):
+            cid = self.meta[i]["chunk_id"]
+            picked.setdefault(cid, {})["bm25"] = rank + 1
+
+        fused = sorted(picked.items(),
+                       key=lambda kv: -sum(1.0 / (RRF_K + x) for x in kv[1].values()))
+        out = []
+        for cid, src in fused[:k]:
+            m = self.md_of[cid]
+            out.append({
+                "chunk_id": cid,
+                "text": self.text_of[cid][:EVIDENCE_CHARS],
+                "doc_id": m.get("doc_id"),
+                "doc_type": m.get("doc_type"),
+                "fund_name": m.get("fund_name"),
+                "fund_code": m.get("fund_code"),
+                "page": m.get("page"),
+                "base_date": m.get("base_date"),
+                "source_path": m.get("source_path"),
+                "found_by": "+".join(src.keys()),
+            })
+        return out
+
     def __call__(self, state: dict) -> dict:
         q = state["question"]
         r = state.get("route") or {}
@@ -304,6 +493,22 @@ class Retriever:
         # CLOVA 호출 1회 = 데드라인에서 그만큼 손해다.
         if "query_emb" not in state:
             state["query_emb"] = embed_query(q)
+
+        # 같은 계열 펀드 비교 질문이면 펀드별로 따로 검색해서 합친다.
+        # ("솔로몬 국공채 단기·중장기·장기" 같은 질문에서 한 펀드가 상위를
+        #  독식해 나머지가 근거에서 통째로 빠지는 문제를 막는다 — 근거 완전성)
+        compare_funds = self._detect_compare_funds(q)
+        if compare_funds:
+            per_fund_k = max(2, TOP_K // len(compare_funds))
+            ev = []
+            for fc, fname in compare_funds:
+                ev.extend(self._fund_evidence(state["query_emb"], q, fc, per_fund_k))
+            state["evidence"] = ev
+            names = ", ".join(fn for _, fn in compare_funds)
+            state["trace"].append(
+                f"retrieve: 계열 비교 질문 감지({len(compare_funds)}개 펀드) → "
+                f"펀드별 검색 [{names}] → 상위 {len(ev)}개")
+            return state
 
         ranks: dict[str, dict[str, int]] = {}
         res = self.col.query(query_embeddings=[state["query_emb"]], n_results=POOL,
@@ -390,9 +595,13 @@ CREATE TABLE fund_fees (
     source_path TEXT       -- 원문 경로
 );
 
-■ 실제 값 예시 (이 값만 사용하십시오):
-  account_type: '연금저축', '퇴직연금', '' (빈 문자열은 일반 계좌)
-  channel: '온라인', '오프라인', '온라인슈퍼'
+■ 실제 값 (이 값만 사용하십시오 — 다른 리터럴을 지어내지 마십시오):
+  account_type: '연금저축'(48행), '퇴직연금'(53행), NULL(262행 — 연금 전용이 아닌 일반 클래스)
+      ※ 빈 문자열('')이 아니라 NULL입니다. account_type = '' 는 항상 0행입니다.
+  channel: '오프라인'(203행), '온라인'(121행), '온라인슈퍼'(14행), NULL(25행)
+  fee_total 범위: 0.075 ~ 3.0
+  fee_distribution, fee_peer_avg, fee_total_cost 에는 NULL이 많습니다.
+  363행은 "펀드 × 클래스" 조합이고, 실제 펀드 종류는 73개입니다.
 
 ■ 유형별 필터 패턴:
   채권형 펀드: fund_name LIKE '%채권%'
@@ -400,13 +609,20 @@ CREATE TABLE fund_fees (
   특정 펀드 검색: fund_name LIKE '%키워드%'
   연금저축 전용: account_type = '연금저축'
   퇴직연금 전용: account_type = '퇴직연금'
+  연금계좌 전체:  account_type IS NOT NULL
+  일반(연금 전용 아님): account_type IS NULL
 
 ■ 규칙:
   1. SELECT 문 하나만 출력하십시오 (설명·주석 없이 SQL만)
   2. ORDER BY로 정렬하십시오 (비교·순위 질문일 때)
   3. 적절한 LIMIT을 포함하십시오 (목록이면 20, 최소/최대면 5)
   4. 같은 펀드가 여러 클래스로 나오면 가장 낮은 보수의 클래스를 기준으로 하십시오
-  5. 집계(평균, 개수 등)가 필요하면 GROUP BY와 AVG/COUNT를 사용하십시오"""
+  5. 집계(평균, 개수 등)가 필요하면 GROUP BY와 AVG/COUNT를 사용하십시오
+  6. NULL 비교에 = 나 != 를 쓰지 마십시오. IS NULL / IS NOT NULL을 쓰십시오
+  7. 질문이 "연금 펀드"라고만 하면 account_type으로 좁히지 마십시오.
+     '연금저축', '퇴직연금'을 명시했을 때만 필터하십시오
+  8. SELECT에 fund_name, class_label, fee_total은 기본으로 포함하십시오.
+     사용자가 결과를 검증할 수 있어야 합니다"""
 
 
 _DANGEROUS_KW = re.compile(
@@ -460,8 +676,21 @@ def _validate_sql(sql: str) -> str:
 
 
 def fee_sql(state: dict) -> dict:
-    """자연어 → SQL → 실행. 실패하면 1회 재시도, 그래도 실패하면 검색으로 폴백."""
+    """자연어 → SQL → 실행. 실패하면 1회 재시도, 그래도 실패하면 검색으로 폴백.
+
+    route()가 need_sql을 세우지 않았으면 아무것도 하지 않고 통과한다.
+    이렇게 해두면 run()의 노드 목록에 조건 분기를 넣지 않아도 되고,
+    나중에 LangGraph로 옮길 때 그대로 조건부 엣지가 된다.
+    """
     import sqlite3
+
+    if not (state.get("route") or {}).get("need_sql"):
+        return state
+
+    if not os.path.exists(FUND_FEES_DB):
+        state["trace"].append(
+            f"fee_sql: DB를 찾지 못해 건너뜀 ({FUND_FEES_DB}) → 검색 결과로만 답변")
+        return state
 
     q = state["question"]
     raw_sql = ""
@@ -483,6 +712,22 @@ def fee_sql(state: dict) -> dict:
             cols = [d[0] for d in cur.description]
             rows = [dict(zip(cols, r)) for r in cur.fetchall()]
             conn.close()
+
+            # HCX가 만든 SQL의 ORDER BY를 믿지 않는다. "가장 싼 게 뭔가요?" 질문에서
+            # GROUP BY만 쓰고 ORDER BY를 빠뜨려 LLM이 정렬 안 된 30행을 눈으로 훑다가
+            # 최솟값을 놓친 사례가 실제로 있었다(Q-014, fee_total 0.15%인 NH-Amundi를
+            # 두고 0.22%짜리를 "가장 싸다"고 답함). SQL을 못 믿으면 파이썬으로 다시
+            # 정렬한다 — fee_total 컬럼이 있고 질문에 최저/최고 신호가 있을 때만.
+            if rows and "fee_total" in rows[0]:
+                low_q = q.lower()
+                if any(k in low_q for k in SQL_SORT_ASC):
+                    rows = sorted(rows, key=lambda r: (r.get("fee_total") is None,
+                                                        r.get("fee_total")))
+                    state["trace"].append("fee_sql: 최저값 질문 감지 → fee_total 오름차순 재정렬")
+                elif any(k in low_q for k in SQL_SORT_DESC):
+                    rows = sorted(rows, key=lambda r: (r.get("fee_total") is None,
+                                                        -(r.get("fee_total") or 0)))
+                    state["trace"].append("fee_sql: 최고값 질문 감지 → fee_total 내림차순 재정렬")
 
             state["sql_query"] = sql
             state["sql_rows"] = rows
@@ -548,6 +793,105 @@ def format_sql_results(state: dict) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════
+# ②-c  calc — 연금수령한도는 LLM이 아니라 코드로 계산한다
+#
+# 공식(doc39 등 "연금수령한도 안내" 문서에서 확인):
+#     연금수령한도 = 연금계좌 평가액 / (11 - 연금수령연차) × 120%
+#   · 1년차: 분모 10 (한도가 가장 좁다)
+#   · 10년차: 분모 1 (평가액의 120%까지)
+#   · 11년차 이상: 한도 자체가 없다 — 전액 인출해도 연금수령으로 인정
+#
+# HCX-007에게 이 공식을 그대로 시키면 종종 ×120%를 ×(11-연차)로 잘못
+# 적용해 8배 틀린 값을 낸다(evalset Q-030에서 두 라운드 연속 재현됨).
+# 프롬프트로 못 고치는 산수 오류라 파이썬으로 직접 계산해 "이 값을
+# 그대로 쓰라"고 근거에 넣어준다.
+# ══════════════════════════════════════════════════════════════════════
+
+def _parse_won(text: str) -> "int | None":
+    """'1억', '1억 2,000만원', '100,000,000원' 같은 한글 금액 표현을 원 단위로.
+
+    금액 단위를 하나도 못 찾으면 None을 준다 — calc를 켜지 않기 위한 신호다.
+    """
+    text = text.replace(",", "")
+    units = {"조": 1_0000_0000_0000, "억": 1_0000_0000,
+             "천만": 1000_0000, "백만": 100_0000,
+             "만": 1_0000, "원": 1}
+    pattern = re.compile(r"(\d+(?:\.\d+)?)\s*(조|억|천만|백만|만|원)")
+    total, found = 0.0, False
+    for m in pattern.finditer(text):
+        total += float(m.group(1)) * units[m.group(2)]
+        found = True
+    return int(round(total)) if found else None
+
+
+def _extract_year_car(text: str) -> "tuple[int | None, str]":
+    """연금수령연차를 뽑는다. 명시가 없으면 나이에서 '올해 최초 개시'로 추정한다.
+
+    실제로 몇 년째 받고 있는지는 질문에 안 나오면 알 방법이 없다. 그 경우
+    가정을 계산 결과 텍스트에 명시해 답변에서 드러나게 한다.
+    """
+    m = re.search(r"(\d+)\s*년\s*차", text)
+    if m:
+        return int(m.group(1)), "질문에 명시된 연차"
+    m = re.search(r"(\d+)\s*년째", text)
+    if m:
+        return int(m.group(1)), "질문에 명시된 연차('~년째')"
+    m = re.search(r"(?:만\s*)?(\d{2})\s*세", text)
+    if m:
+        age = int(m.group(1))
+        if age < 55:
+            return 0, f"만 {age}세는 연금수령 개시 연령(55세) 미만"
+        return age - 54, f"만 {age}세를 올해 최초 연금개시로 가정 → {age-54}년차"
+    return None, "연차·나이 정보를 찾지 못함"
+
+
+def _format_won(amount: float) -> str:
+    amount = int(round(amount))
+    eok, rem = divmod(amount, 100_000_000)
+    man, won = divmod(rem, 10_000)
+    parts = []
+    if eok:
+        parts.append(f"{eok}억")
+    if man:
+        parts.append(f"{man:,}만원")
+    if not parts or won:
+        parts.append(f"{won:,}원" if won or not parts else "")
+    return " ".join(p for p in parts if p)
+
+
+def calc(state: dict) -> dict:
+    """연금수령한도를 코드로 직접 계산한다. LLM에게 산수를 시키지 않는다."""
+    q = state["question"]
+    amount = _parse_won(q)
+    year_car, basis = _extract_year_car(q)
+
+    if amount is None or year_car is None:
+        state["trace"].append("calc: 평가액 또는 연차/나이를 추출하지 못해 건너뜀")
+        return state
+
+    if year_car < 1:
+        text = (f"[계산 결과] {basis}이므로 아직 연금수령 요건(만 55세 이상)을 "
+                f"충족하지 못한 것으로 보입니다. 연금수령한도 계산 대상이 아닙니다.")
+    elif year_car >= 11:
+        text = (f"[계산 결과] 연금수령연차 {year_car}년차({basis})는 11년차 이상이므로 "
+                f"연금수령한도가 없습니다. 평가액 전액을 인출해도 연금수령으로 "
+                f"인정됩니다.")
+    else:
+        limit = amount / (11 - year_car) * 1.2
+        text = (
+            f"[계산 결과] 연금수령한도 = 연금계좌 평가액 / (11 - 연금수령연차) × 120%\n"
+            f"  평가액 {_format_won(amount)} / (11 - {year_car}) × 120% "
+            f"= {_format_won(limit)}\n"
+            f"  ※ 연차 산정 근거: {basis}\n"
+            f"  ※ 이 값은 코드로 직접 계산했습니다. 답변에서 이 숫자를 그대로 쓰고 "
+            f"다시 계산하지 마십시오.")
+
+    state["calc_result"] = text
+    state["trace"].append(f"calc: {text.splitlines()[0]}")
+    return state
+
+
+# ══════════════════════════════════════════════════════════════════════
 # ③ compose — HCX-007로 답변 생성
 #
 # 프롬프트에서 신경 쓴 지점 네 가지. 전부 실제로 관찰한 실패에서 나왔다.
@@ -591,6 +935,15 @@ SYSTEM_PROMPT = """당신은 미래에셋증권의 연금 상담 전문가입니
 예외나 단서가 함께 적혀 있으면 그것도 같이 옮기십시오.
     예) "원칙적으로 이전 불가능. 단, 기관 보유 퇴직금은 이전 가능"
 
+[규칙 2-b — 사용자의 과장·유도성 전제를 그대로 수긍하지 않는다]
+질문에 "엄청", "어마어마하게", "무조건", "최고로", "완전" 같은 과장된 표현이나
+근거 없는 단정이 섞여 있으면, 근거 자료의 실제 수치·조건과 대조해 사실 여부를
+확인하십시오. 사용자의 표현이 과장이거나 부정확하면 그대로 따라 쓰지 말고
+"말씀하신 것처럼 크지는 않고, 실제로는 ~"처럼 정확한 사실로 바로잡으십시오.
+근거에 있는 수치를 그대로 인용하는 것이 최선의 정정입니다.
+    예) 질문 "절세 효과가 어마어마하다던데" → 근거에 "30%~50% 감면"이라고만
+        있으면 "감면율은 30~50%로, 전액 비과세는 아닙니다"처럼 과장을 정정
+
 [규칙 3 — 구체적인 수치와 조건은 절대 요약하지 않는다]  ★가장 중요
 근거에 수치(금액, 비율, 세율, 기간 등)가 여러 개 나열되어 있거나 조건에 따라 다르게 제시된 경우, 임의로 하나만 선택하거나 뭉뚱그리지 말고 **전부 다** 적으십시오.
   (잘못된 예: "16.5% 과세" / 잘된 예: "소득에 따라 13.2% 또는 16.5% 과세")
@@ -607,9 +960,19 @@ SYSTEM_PROMPT = """당신은 미래에셋증권의 연금 상담 전문가입니
 모든 수치와 조건에는 출처를 함께 적으십시오.
     형식: (문서명 N쪽) 또는 (펀드명 투자설명서 N쪽, 기준일 YYYY-MM-DD)
 
-[규칙 5 — 되묻지 않는다]
-질문이 모호하면 되묻지 말고 해당하는 경우를 모두 나열해 답하십시오.
-    예) "연금저축은 ~, 퇴직연금(IRP)은 ~"
+[규칙 5 — 정보가 부족해도 답변을 포기하지 않는다]
+5-a) 질문이 둘 중 하나로 갈리는 정도로 모호하면(예: 어느 계좌인지 안 밝힘)
+     되묻지 말고 해당하는 경우를 모두 나열해 답하십시오.
+     예) "연금저축은 ~, 퇴직연금(IRP)은 ~"
+5-b) 질문이 개인의 조건(투자성향, 계좌유형, 투자기간, 목표 금액 등)을 아예
+     제공하지 않아 근거만으로는 하나의 정답을 고를 수 없는 경우(예: "좋은 상품
+     추천해주세요"), 다음 두 가지를 **모두** 하십시오.
+       ① 정확한 답을 드리려면 어떤 정보(투자성향·계좌유형·투자기간 등)가
+          필요한지 먼저 명시하십시오.
+       ② 그 다음, 근거 자료에 있는 일반적인 기준(예: 총보수가 낮은 상품,
+          안정형이면 채권형)으로 답할 수 있는 만큼 답하십시오.
+     이 API는 단발성 요청이라 되물어도 답을 받을 수 없습니다. 정보 부족을
+     이유로 답변 자체를 생략하거나 질문만 던지고 끝내지 마십시오.
 
 [형식]
 - 핵심 답변을 먼저 쓰고, 그다음 조건·예외·근거를 설명합니다.
@@ -634,22 +997,32 @@ def format_evidence(ev: list[dict]) -> str:
 def compose(state: dict) -> dict:
     ev = state.get("evidence") or []
     sql_text = format_sql_results(state)
+    calc_text = state.get("calc_result") or ""
 
-    if not ev and not sql_text:
+    if not ev and not sql_text and not calc_text:
         state["answer"] = "제공된 자료에서 관련 근거를 찾지 못했습니다."
         state["trace"].append("compose: 근거가 없어 생성을 건너뜀")
         return state
 
-    # 근거 블록 조립: SQL 결과가 있으면 앞에 배치한다
+    # 근거 블록 조립: 계산 결과 → SQL 결과 → 검색 근거 순으로 배치한다.
+    # 계산 결과가 가장 확실한 사실이므로 맨 앞에 둔다.
     parts = []
+    if calc_text:
+        parts.append(calc_text)
     if sql_text:
         parts.append(sql_text)
     if ev:
         parts.append(format_evidence(ev))
     context_block = "\n\n".join(parts)
 
-    # SQL 결과가 있으면 지시를 보강한다
-    if sql_text:
+    # 계산·SQL 결과가 있으면 지시를 보강한다
+    if calc_text:
+        user_suffix = (
+            "위 근거를 사용해 답하십시오. [계산 결과]에 나온 숫자는 코드로 이미 "
+            "정확히 계산된 값이니 그대로 인용하고, 직접 다시 계산하거나 다른 "
+            "값으로 바꾸지 마십시오. 근거 자료에서 관련 조건·예외도 함께 "
+            "설명하십시오.")
+    elif sql_text:
         user_suffix = (
             "위 근거를 사용해 답하십시오. SQL 조회 결과의 수치(보수율, 펀드명 등)를 "
             "정확히 인용하고, 근거 자료에서 추가 맥락(투자 전략, 위험 등급 등)을 "
@@ -707,7 +1080,13 @@ def to_response(state: dict) -> dict:
     ctx_parts = []
     used = 0
 
-    # SQL 결과가 있으면 맨 앞에 넣는다 (평가에서 이 필드가 채점 대상)
+    # 계산 결과가 있으면 가장 앞에 넣는다 (평가에서 이 필드가 채점 대상)
+    calc_text = state.get("calc_result")
+    if calc_text:
+        ctx_parts.append(calc_text)
+        used += len(calc_text)
+
+    # SQL 결과가 있으면 그다음에 넣는다
     sql_rows = state.get("sql_rows")
     sql_query = state.get("sql_query", "")
     if sql_rows and sql_query:
@@ -775,7 +1154,28 @@ def run(question: str, question_id: str = "", use_cache: bool = True) -> dict:
     state = {"question": question, "question_id": question_id,
              "trace": [], "today": str(date.today())}
 
-    for node in (route, retriever, compose):
+    state = safety_check(state)
+    if state.get("_blocked"):
+        state["trace"].append(f"총 소요 {time.monotonic()-t0:.1f}초")
+        resp = to_response(state)
+        if question_id:
+            _CACHE[question_id] = resp
+        return resp
+
+    # route를 먼저 실행해야 need_sql을 알 수 있다
+    state = route(state)
+
+    # 노드 파이프라인을 동적으로 구성한다.
+    # fee_sql은 route가 need_sql을 설정했을 때만 실행된다.
+    # 검색(retrieve)은 항상 실행한다 — SQL 결과만으로는 출처 표기가 빈약하다.
+    nodes = [retriever]
+    if state.get("route", {}).get("need_sql"):
+        nodes.append(fee_sql)
+    if state.get("route", {}).get("need_calc"):
+        nodes.append(calc)
+    nodes.append(compose)
+
+    for node in nodes:
         if time.monotonic() - t0 > DEADLINE:
             state["trace"].append(
                 f"⏱ {DEADLINE}초 초과 — 남은 단계를 건너뛰고 현재까지로 응답")

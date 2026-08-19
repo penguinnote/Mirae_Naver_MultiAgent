@@ -1,4 +1,38 @@
-# 연금 Agent — RAG 데이터셋 구축
+# 연금 Agent
+
+미래에셋증권 AI Festival 출품작. RAG + 멀티에이전트 연금 상담 시스템입니다.
+문서 파싱부터 하이브리드 검색, Fee-SQL, 답변 생성까지 전 과정을 이 저장소에서 관리합니다.
+
+## 평가용 엔드포인트
+
+```
+(배포 후 이 자리에 기입 — http://{공인 IP}/answer)
+```
+
+아직 배포 전입니다. 배포 완료 후 반드시 이 자리를 채워야 합니다(대회 필수 요구사항).
+
+## 현재 상태 (2026-08-18)
+
+| 계층 | 상태 | 수치 |
+|---|---|---|
+| 데이터 추출·정제 | ✅ | 157문서 → 14,745 청크 |
+| 임베딩·인덱싱 | ✅ | 14,745/14,745, 실패 0 |
+| 하이브리드 검색 | ✅ | 근거 충족률 88.9% (k=5) |
+| `fund_fees` SQL | ✅ | 73/81 펀드, 363행 |
+| 평가셋 | ✅ | v1 40문항 + v2 26문항 |
+| **v0 에이전트** | ✅ | 정답률 90.0%(v1셋), 회귀 없음 확인 |
+| Fee-SQL 노드 | ✅ | 상품 필터링 5/5 통과 |
+| Calculator 노드 | ✅ | 연금수령한도 계산 오류 해결 |
+| 안전성 가드(PII·인젝션) | ✅ | 표준 거절 응답, 오탐 0건 |
+| FastAPI `/answer` | ⬜ 다음 작업 | |
+| NCP 배포 | ⬜ 미착수 | |
+
+세부 내역과 실패/성공 실험 기록은 프로젝트 문서(`claude/` 폴더 원본은 Claude 프로젝트에,
+로컬에는 `CLAUDE.md`)에 있습니다.
+
+---
+
+## 1단계: 문서 → 청크 (`build_dataset.py`)
 
 PDF·DOCX 문서를 **RAG 검색용 JSONL**로 변환하는 파이프라인입니다.
 
@@ -195,17 +229,62 @@ python search.py "중도인출" --json
 `--fund`로 거르면 해당 펀드의 개별 청크 + 그 펀드가 공유하는 공통 조항이 함께 나옵니다
 (`doc_ids` 기반). 정보 손실 없이 다른 펀드 내용만 배제됩니다.
 
+## 5단계: v0 에이전트 (`agent.py`)
+
+검색·Fee-SQL·계산을 하나로 묶어 최종 답변을 만듭니다.
+
+```
+safety_check → route → retrieve → [fee_sql] → [calc] → compose → to_response
+```
+
+- **safety_check**: 개인정보(주민등록번호 등)·프롬프트 인젝션 패턴을 정규식으로 먼저 걸러
+  HCX 호출 전에 표준 거절 응답을 준다.
+- **route**: LLM 없이 규칙으로 문서유형(제도/투자설명서)을 판별하고, 수치 비교·정렬
+  질문이면 `need_sql`, 연금수령한도 계산이면 `need_calc`를 켠다.
+- **retrieve**: 하이브리드 검색(벡터+BM25+RRF). 같은 계열 펀드(단기/중장기/장기 등)를
+  비교하는 질문이면 펀드별로 따로 검색해서 합친다(한 펀드가 상위를 독식해 나머지가
+  근거에서 빠지는 문제 방지).
+- **fee_sql**: 자연어를 HCX-007로 SQL로 바꿔 `fund_fees.sqlite`를 조회한다.
+  SQL의 정렬을 신뢰하지 않고 "가장 싼/최저" 류 질문은 파이썬에서 재정렬한다.
+- **calc**: 연금수령한도(`평가액/(11-연차)×120%`) 같은 정해진 공식은 LLM에게 시키지
+  않고 코드로 직접 계산한다.
+- **compose**: HCX-007로 최종 답변 생성. 근거 결론을 뒤집지 않기, 수치·조건을
+  요약하지 않고 전부 옮기기, 사용자의 과장된 전제를 그대로 수긍하지 않기,
+  정보가 부족해도 답변을 포기하지 않기 등을 프롬프트 규칙으로 강제한다.
+
+```bash
+python agent.py "퇴직연금 중도인출 사유가 뭐야?"
+python agent.py "총보수 싼 연금저축 펀드 알려줘" --show-evidence
+python agent.py --selftest      # HCX 연결·파라미터 조합 확인
+```
+
+## 6단계: 평가 (`build_evalset*.py`, `eval_answers.py`, `run_eval.py`)
+
+```bash
+# 답변까지 채점 (팀 공용, 표준 라이브러리만 사용)
+python eval_answers.py --adapter agent:answer_for_eval --evalset evalset_v1.json --show
+
+# 검색 계층만 따로 측정 (하이브리드/벡터/BM25 비교)
+python run_eval.py --compare
+
+# 배포된 엔드포인트 검증 (응답 규격까지 자동 점검)
+python eval_answers.py --endpoint http://IP/answer --evalset evalset_v1.json
+```
+
+`eval_answers.py`는 팀원 모두가 자신의 시스템을 같은 기준으로 채점할 수 있도록
+표준 라이브러리만 사용합니다. `eval_share/` 폴더에 배포용 사본이 있습니다.
+
+- `evalset_v1.json` (40문항) — 우리가 고른 질문, 근거 청크까지 매핑
+- `evalset_v2.json` (26문항) — 팀에서 받은 질문, 커버리지 점검용
+
 ## 다음 단계
 
-1. **답변 생성 붙이기** — `search.py --json` 결과를 HyperCLOVA X 프롬프트에 넣고,
-   `fund_name` + `page` + `base_date`를 함께 전달해
-   "2025-10-01 기준 투자설명서 23쪽"처럼 인용하게 만듭니다.
-2. **평가셋 만들기** — 실제 상담 질문 30~50개와 정답 근거 청크를 짝지어두면
-   청킹 크기나 검색 방식을 바꿀 때 좋아졌는지 나빠졌는지 판단할 수 있습니다.
-   이거 없이 튜닝하면 감으로 하는 겁니다.
-3. **파인튜닝은 나중에** — 문서 사실을 가중치에 넣지 말고, 말투·답변 형식을 잡을 때
-   소량의 Q&A 쌍으로만. CLOVA Studio 규격은 CSV/JSONL, UTF-8,
-   `C_ID / T_ID / Text / Completion`, 행당 8,000자 이하, 400행 이상 권장입니다.
+1. **FastAPI `/answer` 서버** — 대회 규격(`GET /answer?question_id=&question=`,
+   헤더 없음, 5개 문자열 필드)에 맞춰 `agent.py`를 감싼다. (다음 작업)
+2. **NCP 배포** — 공인 IP, ACG 80포트 허용, nginx(`proxy_read_timeout 320s`),
+   systemd(`Restart=always`).
+3. **파인튜닝은 하지 않는다** — 문서 사실을 가중치에 넣지 않고, RAG로 근거를 준다.
+   대회 규정상 답변 생성 LLM은 HyperCLOVA 계열이어야 한다.
 
 ## 파일 구성
 
@@ -214,6 +293,12 @@ build_dataset.py      1단계  문서 → chunks.jsonl
 finalize_dataset.py   2단계  중복 제거 → chunks_final.jsonl
 embed_and_index.py    3단계  임베딩 → Chroma
 search.py             4단계  하이브리드 검색
+build_fund_fees.py    -      표 청크 → fund_fees.sqlite (Fee-SQL용)
+agent.py              5단계  v0 에이전트 (route→retrieve→fee_sql→calc→compose)
+build_evalset.py      6단계  평가셋 v1 생성
+build_evalset_v2.py   6단계  평가셋 v2 생성
+eval_answers.py        6단계  답변 채점 (팀 공용)
+run_eval.py            6단계  검색 계층만 측정
 ```
 
 ## 튜닝 포인트
