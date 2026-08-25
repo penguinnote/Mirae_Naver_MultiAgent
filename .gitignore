@@ -43,3 +43,18 @@ __pycache__/
 .DS_Store
 _to_delete/
 *.bak_*
+
+# ── 팀 blind 평가 자료 (2026-08-25) ───────────────────────
+# scored_*.json 에는 비공개 정답(gold_answer)이 그대로 들어갑니다.
+# 공개 repo에 올라가면 팀 blind 평가가 무효가 됩니다.
+gold_private_*.json
+scored_*.json
+raw_*_integrated_*.json
+questions_only_*.json
+blind_runner*.py
+leakage_*.json
+
+# ── 일회성 진단 스크립트 ──────────────────────────────────
+diag_api*.py
+verify_fix*.py
+check_chunks.py

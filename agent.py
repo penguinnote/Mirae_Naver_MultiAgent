@@ -71,6 +71,33 @@ TOP_K = 5            # 평가 결과상 k=5가 최적 (k=20으로 늘려도 +2.8
 EVIDENCE_CHARS = 1500  # 청크 하나당 프롬프트에 넣을 최대 길이
 DEADLINE = 240       # 주최측 타임아웃 300초 중 60초를 안전 마진으로 남긴다
 
+# HCX 호출 재시도 정책
+#
+# 2026-08-24 실측으로 알아낸 것:
+#   · 정상 응답은 1~25초.
+#   · 그런데 계정에 호출 빈도 제한이 걸려 있고, 초과분에 429를 주는 게 아니라
+#     **응답을 아예 안 준다**(서버 큐에 물림). 간격 0/15/30초는 전부 무응답,
+#     60초를 쉬면 1.9초에 성공.
+#   · 클라이언트가 타임아웃으로 포기해도 서버 쪽 자리는 한동안 물려 있다.
+#     그래서 한 번 막히면 이후 요청이 연쇄적으로 무너진다.
+#
+# 여기서 나오는 설계 원칙 두 가지:
+#   1) 함부로 포기하지 않는다. 타임아웃을 짧게 잡고 버리면 그 요청은 서버에서
+#      계속 돌면서 자리만 먹고, 우리는 새 요청을 얹어 상황을 악화시킨다.
+#   2) 재시도는 드물게, 충분히 쉬고. 실패 직후 곧바로 다시 거는 것은
+#      제한을 한 번 더 때리는 행동이라 거의 확실히 또 실패한다.
+HCX_CALL_TIMEOUT = 110   # 넉넉히 기다린다. 느린 생성을 중도 포기하지 않기 위해서다
+HCX_MAX_ATTEMPTS = 2     # 재시도는 한 번뿐
+HCX_RETRY_BACKOFF = 20   # 재시도 전 쉬는 시간
+HCX_MIN_BUDGET = 40      # 남은 예산이 이보다 적으면 재시도하지 않는다
+HCX_MIN_INTERVAL = 2.0   # 연속 호출 사이 최소 간격(초)
+
+# 연속 타임아웃이 이만큼 쌓이면 재시도를 끈다.
+# 제한에 걸린 상태에서 재시도는 상황을 악화시키기만 한다.
+HCX_BREAKER_THRESHOLD = 2
+_consecutive_timeouts = 0
+_last_call_at = 0.0
+
 
 # ══════════════════════════════════════════════════════════════════════
 # HCX-007 클라이언트
@@ -135,7 +162,8 @@ def _post(messages, extra, max_tokens, temperature, timeout=120):
 
 
 def call_hcx(messages: list[dict], max_tokens: int = 1200,
-             temperature: float = 0.2, raw: bool = False, verbose: bool = False):
+             temperature: float = 0.2, raw: bool = False, verbose: bool = False,
+             timeout: int = 120):
     """통하는 body 조합을 찾아서 호출한다. 찾은 조합은 전역에 고정한다."""
     global _BODY_PROFILE
 
@@ -147,7 +175,7 @@ def call_hcx(messages: list[dict], max_tokens: int = 1200,
     last = ""
     for name, build in order:
         extra = build(max_tokens, temperature)
-        r = _post(messages, extra, max_tokens, temperature)
+        r = _post(messages, extra, max_tokens, temperature, timeout=timeout)
         if verbose:
             head = json.dumps(extra, ensure_ascii=False)[:70]
             print(f"    [{name:26}] {head:72} → HTTP {r.status_code}")
@@ -166,6 +194,14 @@ def call_hcx(messages: list[dict], max_tokens: int = 1200,
     raise RuntimeError(
         f"HCX 호출 실패 — 마지막 응답: {last}\n"
         f"시도한 조합: {[n for n, _ in order]}")
+
+
+class HCXEmptyContent(RuntimeError):
+    """HTTP 200인데 답변 본문이 비어 있다.
+
+    추론 모델이 maxCompletionTokens를 사고 과정에 다 써버린 경우.
+    예산을 늘려 다시 부르면 풀리므로 일반 실패와 구분한다.
+    """
 
 
 def parse_hcx(js: dict) -> str:
@@ -191,6 +227,23 @@ def parse_hcx(js: dict) -> str:
                 c.get("text", "") if isinstance(c, dict) else str(c) for c in cur)
             if joined.strip():
                 return joined.strip()
+
+    # 여기까지 왔으면 본문이 비었다는 뜻이다.
+    # HCX-007은 추론 모델이라 maxCompletionTokens를 **사고(thinking)와 답변이
+    # 나눠 쓴다**. 사고가 예산을 다 먹으면 200이 오면서도 content=""가 된다.
+    # 실측: maxCompletionTokens=50 → content="" + thinkingContent 가득.
+    #
+    # 이건 "응답 스키마를 모르는" 상황과 전혀 다르다. 예산만 늘리면 풀리므로
+    # 별도 예외로 구분해서 호출부가 재시도할 수 있게 한다.
+    msg = (js.get("result") or {})
+    if isinstance(msg, dict):
+        inner = msg.get("message")
+        if isinstance(inner, dict) and inner.get("thinkingContent"):
+            think_len = len(str(inner.get("thinkingContent")))
+            raise HCXEmptyContent(
+                f"답변 본문이 비었습니다 — 토큰을 사고에 다 썼습니다 "
+                f"(thinkingContent {think_len}자). maxCompletionTokens를 늘리거나 "
+                f"thinking을 끄면 해결됩니다.")
 
     raise RuntimeError(
         "HCX 응답에서 본문을 못 찾았습니다. 아래 원문을 보고 parse_hcx()에 "
@@ -223,7 +276,15 @@ FUND_CODE_RE = re.compile(r"\bKR\d{10}[A-Z0-9]?\b", re.I)
 SQL_COMPARE = ["이하", "이상", "미만", "초과", "넘는", "안 넘는", "안넘는",
                "보다 싼", "보다 낮", "보다 높", "보다 비싼",
                # "A랑 B 중에 어느 쪽이 더 싼가" 형태도 결국 수치 비교다
-               "더 싼", "더 저렴", "더 낮", "더 높", "더 비싼", "어느 쪽이"]
+               "더 싼", "더 저렴", "더 낮", "더 높", "더 비싼", "어느 쪽이",
+               # ── 2026-08-25 추가 ──────────────────────────────────
+               # 56문항 blind 감사 결과, 수수료 필드를 언급한 15문항 중 11개가
+               # SQL을 못 켜고 있었다. 비교를 요청하는 가장 흔한 한국어 표현인
+               # "비교해 주세요", "낮은 쪽", "어떻게 다른가요"가 통째로 빠져 있었다.
+               "비교", "차이", "대비",
+               "낮은", "높은", "싼", "저렴",       # "총보수가 낮은 쪽은?"
+               "다른가", "다릅", "다른지",          # "어떻게 다른가요?"
+               "어느", "중 어", "골라", "고르"]
 SQL_SORT = ["가장 싼", "가장 비싼", "가장 낮은", "가장 높은", "가장 저렴",
             "싼 순", "낮은 순", "높은 순", "비싼 순", "저렴한 순",
             "제일 싼", "제일 낮은", "제일 저렴", "최저", "최고"]
@@ -238,8 +299,28 @@ SQL_FIELD = ["총보수", "수수료", "보수", "판매보수", "판매수수�
 FUND_FEES_DB = str(Path(__file__).resolve().parent / "dataset" / "fund_fees.sqlite")
 
 
+# 클래스 코드 표기를 잡는다: C-P, A-E, A-e, R-A, C-P2e, S, Ae, Ce …
+# 앞뒤가 한글/숫자/영문이면 매치하지 않는다(단어 중간의 우연한 문자 제외).
+_CLASS_CODE_RE = re.compile(
+    r"(?<![0-9A-Za-z])"
+    r"(?:[ABCRSJ][0-9]?(?:-[A-Za-z][0-9]?[a-z]?)?[a-z]?)"
+    r"(?![0-9A-Za-z])"
+)
+
+
 def _needs_sql(question: str) -> bool:
-    """수치 필터·정렬·집계가 필요한 질문인지 규칙으로 판별한다."""
+    """수치 필터·정렬·집계가 필요한 질문인지 규칙으로 판별한다.
+
+    수수료 필드를 언급하면서 아래 중 하나라도 해당하면 켠다:
+      · 비교/정렬/집계 표현
+      · 클래스 코드(C-P, A-E …)나 '클래스'라는 말
+
+    마지막 조건을 넣은 이유: "삼성ABF R-A의 총보수는 얼마인가요?" 같은
+    단일 사실 조회도 DB에 정확한 값이 있는데(0.4%), 검색으로만 답하면
+    투자설명서 표를 잘못 읽어 틀린다. 실측으로 확인된 실패 패턴이다.
+    오탐이 나도 fee_sql은 0행이면 그 사실을 알리고 검색으로 폴백하므로
+    손해가 작다.
+    """
     low = question.lower()
     has_field = any(f in low for f in SQL_FIELD)
     if not has_field:
@@ -247,7 +328,8 @@ def _needs_sql(question: str) -> bool:
     has_compare = any(c in low for c in SQL_COMPARE)
     has_sort = any(s in low for s in SQL_SORT)
     has_agg = any(a in low for a in SQL_AGG)
-    return has_compare or has_sort or has_agg
+    has_class = "클래스" in question or bool(_CLASS_CODE_RE.search(question))
+    return has_compare or has_sort or has_agg or has_class
 
 
 # ── 계산 라우팅 신호 ─────────────────────────────────────────────────
@@ -581,8 +663,12 @@ CREATE TABLE fund_fees (
     fund_code TEXT,        -- 펀드 코드 (예: KR510902511M)
     fund_name TEXT,        -- 펀드명 (예: 미래에셋장기성장포커스증권자투자신탁1호(주식))
     base_date TEXT,        -- 기준일 (예: 2025-01-17)
-    class_label TEXT,      -- 클래스명 (예: 수수료미징구-오프라인-개인연금(C-P))
-    class_code TEXT,       -- 클래스 코드 (예: C-P, C-P2, S-P, A-e)
+    class_label TEXT,      -- 클래스 설명 문자열. 코드가 아니라 긴 문장이다.
+                           --   실제 값 예: '수수료미징구-오프라인-개 인연금(C-P)'
+                           --   ⚠ 원문 PDF에서 뽑은 값이라 한글 중간에 공백이
+                           --     끼어 있는 행이 28%다('개 인연금', '퇴 직연금').
+                           --     그래서 class_label로 한글을 매칭하면 자주 빗나간다.
+    class_code TEXT,       -- 클래스 코드. 클래스를 지정할 땐 **반드시 이 컬럼**을 쓴다.
     account_type TEXT,     -- 계좌 유형: '연금저축' 또는 '퇴직연금' (빈 문자열 = 일반)
     channel TEXT,          -- 판매 채널: '온라인', '오프라인', '온라인슈퍼'
     front_load_text TEXT,  -- 선취수수료 설명
@@ -596,6 +682,13 @@ CREATE TABLE fund_fees (
 );
 
 ■ 실제 값 (이 값만 사용하십시오 — 다른 리터럴을 지어내지 마십시오):
+  class_code 전체 목록 (클래스 조건은 이 컬럼으로 거십시오):
+      A, A-E, A-e, A-u, A-u2, A1, A2, A2e, AG, Ae, B, B-e,
+      C, C-E, C-F, C-H, C-I, C-I2, C-P, C-P1, C-P1e, C-P2, C-P2e,
+      C-Pe, C-Pe1, C-Pe2, C-R, C-RP, C-RPe, C-Re, C-W, C-e, C-g, C-i,
+      C1, C2, C3, C4, CG, Ce, Cf, Cf-RP, Ci-RP, Cw,
+      J-Pe, J-RPe, J-e, R, R-A, S, S-P, S-P2, S-RP, Sp
+      ※ 대소문자를 구분합니다. 'A-e'와 'A-E'는 다른 클래스입니다.
   account_type: '연금저축'(48행), '퇴직연금'(53행), NULL(262행 — 연금 전용이 아닌 일반 클래스)
       ※ 빈 문자열('')이 아니라 NULL입니다. account_type = '' 는 항상 0행입니다.
   channel: '오프라인'(203행), '온라인'(121행), '온라인슈퍼'(14행), NULL(25행)
@@ -612,6 +705,36 @@ CREATE TABLE fund_fees (
   연금계좌 전체:  account_type IS NOT NULL
   일반(연금 전용 아님): account_type IS NULL
 
+■ 펀드명 조회 규칙 (실측상 0행이 나오는 원인 1위입니다):
+  · fund_name에는 **절대 = 나 IN 을 쓰지 마십시오. 항상 LIKE 입니다.**
+        올바름:  WHERE fund_name LIKE '%프리미엄크레딧알파%'
+        틀림  :  WHERE fund_name = '미래에셋프리미엄크레딧알파'        ← 0행
+        틀림  :  WHERE fund_name IN ('미래에셋프리미엄크레딧알파', '삼성ABF')  ← 0행
+    DB의 fund_name은 '미래에셋프리미엄크레딧알파증권자투자신탁(채권)' 처럼
+    정식 명칭 전체입니다. 사용자가 부르는 짧은 이름과 절대 같지 않습니다.
+  · 펀드를 여러 개 비교할 때는 OR로 묶으십시오. 클래스가 펀드마다 다르면
+    괄호로 짝을 지으십시오:
+        WHERE (fund_name LIKE '%프리미엄크레딧알파%' AND class_code = 'A-e')
+           OR (fund_name LIKE '%코리아중기채권%'   AND class_code = 'Ae')
+  · 검색어는 짧고 특징적인 부분만 쓰십시오. 운용사명·'증권자투자신탁'·
+    '제1호' 같은 공통어는 빼는 편이 안전합니다.
+        좋음: '%클래식연금%'      나쁨: '%삼성클래식연금증권전환형투자신탁 제1호%'
+  · 사용자가 클래스를 함께 말했다면 클래스 코드는 fund_name이 아니라
+    class_code로 거십시오. '미래에셋프리미엄크레딧알파 A-e'는
+    fund_name LIKE '%프리미엄크레딧알파%' AND class_code = 'A-e' 입니다.
+
+■ 클래스 조회 규칙 (가장 자주 틀리는 부분입니다):
+  · 클래스 코드로 거를 때는 class_code를 쓰십시오.
+        올바름:  WHERE class_code IN ('A-E', 'C-E')
+        틀림  :  WHERE class_label IN ('A-E', 'C-E')   ← 항상 0행입니다
+    class_label은 '수수료미징구-온라인(C-E)' 같은 긴 설명이라
+    코드와 정확히 일치하는 일이 없습니다.
+  · 굳이 class_label을 봐야 하면 LIKE로 괄호까지 포함해 거십시오:
+        WHERE class_label LIKE '%(C-E)%'
+  · '총보수'는 fee_total, '총보수·비용'/'총비용'은 fee_total_cost입니다.
+    두 값을 모두 물으면 둘 다 SELECT 하십시오.
+  · 환매수수료·선취수수료 조건을 물으면 front_load_text도 SELECT 하십시오.
+
 ■ 규칙:
   1. SELECT 문 하나만 출력하십시오 (설명·주석 없이 SQL만)
   2. ORDER BY로 정렬하십시오 (비교·순위 질문일 때)
@@ -621,8 +744,8 @@ CREATE TABLE fund_fees (
   6. NULL 비교에 = 나 != 를 쓰지 마십시오. IS NULL / IS NOT NULL을 쓰십시오
   7. 질문이 "연금 펀드"라고만 하면 account_type으로 좁히지 마십시오.
      '연금저축', '퇴직연금'을 명시했을 때만 필터하십시오
-  8. SELECT에 fund_name, class_label, fee_total은 기본으로 포함하십시오.
-     사용자가 결과를 검증할 수 있어야 합니다"""
+  8. SELECT에 fund_name, class_code, class_label, fee_total은 기본으로
+     포함하십시오. 사용자가 결과를 검증할 수 있어야 합니다"""
 
 
 _DANGEROUS_KW = re.compile(
@@ -630,6 +753,52 @@ _DANGEROUS_KW = re.compile(
     r"|REPLACE|MERGE|TRUNCATE|GRANT|REVOKE|EXEC)\b",
     re.IGNORECASE,
 )
+
+
+_FUND_EQ_RE = re.compile(r"fund_name\s*=\s*'([^']*)'", re.I)
+_FUND_IN_RE = re.compile(r"fund_name\s+IN\s*\(([^)]*)\)", re.I)
+
+
+def _fund_like(literal: str) -> str:
+    """펀드명 리터럴 하나를 LIKE 패턴으로 바꾼다.
+
+    '미래에셋프리미엄크레딧알파 A-e' 처럼 클래스 코드가 뒤에 붙어 있으면
+    떼어낸다. 클래스는 class_code로 걸러야 하고, 못 걸러도 몇 행 더 나오는
+    편이 0행보다 낫다.
+    """
+    s = literal.strip()
+    parts = s.split()
+    if len(parts) > 1 and _CLASS_CODE_RE.fullmatch(parts[-1]):
+        s = " ".join(parts[:-1])
+    return f"fund_name LIKE '%{s.strip()}%'"
+
+
+def _relax_fund_name(sql: str) -> str | None:
+    """fund_name의 완전일치(= / IN)를 LIKE로 바꾼다. 바꿀 게 없으면 None.
+
+    실측 근거: 56문항 실행에서 fee_sql이 0행을 낸 6건이 **전부** 이 패턴이었다.
+    DB의 fund_name은 '…증권자투자신탁(채권)' 같은 정식 명칭이라
+    사용자가 부르는 짧은 이름과 완전일치할 수가 없다.
+    """
+    out, changed = sql, False
+
+    def _in_sub(m):
+        nonlocal changed
+        lits = re.findall(r"'([^']*)'", m.group(1))
+        if not lits:
+            return m.group(0)
+        changed = True
+        return "(" + " OR ".join(_fund_like(v) for v in lits) + ")"
+
+    out = _FUND_IN_RE.sub(_in_sub, out)
+
+    def _eq_sub(m):
+        nonlocal changed
+        changed = True
+        return _fund_like(m.group(1))
+
+    out = _FUND_EQ_RE.sub(_eq_sub, out)
+    return out if changed else None
 
 
 def _extract_sql(text: str) -> str:
@@ -729,8 +898,34 @@ def fee_sql(state: dict) -> dict:
                                                         -(r.get("fee_total") or 0)))
                     state["trace"].append("fee_sql: 최고값 질문 감지 → fee_total 내림차순 재정렬")
 
+            # 0행이면 펀드명 완전일치 때문일 공산이 크다. LIKE로 바꿔 한 번 더.
+            # LLM을 다시 부르지 않으므로 비용도 지연도 거의 없다.
+            if not rows:
+                relaxed = _relax_fund_name(sql)
+                if relaxed:
+                    try:
+                        conn = sqlite3.connect(FUND_FEES_DB)
+                        conn.row_factory = sqlite3.Row
+                        cur = conn.execute(_validate_sql(relaxed))
+                        cols = [d[0] for d in cur.description]
+                        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+                        conn.close()
+                        state["trace"].append(
+                            f"fee_sql: 0행 → 펀드명 완전일치를 LIKE로 완화해 재조회 "
+                            f"({len(rows)}행)\n  {relaxed}")
+                        if rows:
+                            sql = relaxed
+                    except Exception as e:                   # noqa: BLE001
+                        state["trace"].append(
+                            f"fee_sql: 완화 재조회 실패 ({type(e).__name__})")
+
             state["sql_query"] = sql
             state["sql_rows"] = rows
+            # 0행이면 그 사실을 반드시 compose까지 전달한다.
+            # 예전에는 조용히 넘어갔고, 그러면 LLM이 검색 근거의 표 조각에서
+            # 숫자처럼 보이는 걸 주워 왔다 — 실제로 총보수를 "BL292"라고
+            # 답한 사례가 있다(IB1-502DD2A0). 빈손이면 빈손이라고 말해야 한다.
+            state["sql_empty"] = (len(rows) == 0)
             state["trace"].append(
                 f"fee_sql: SQL 실행 성공 ({len(rows)}행, "
                 f"{time.monotonic()-t0:.1f}초)\n  {sql}")
@@ -757,6 +952,21 @@ def fee_sql(state: dict) -> dict:
     return state
 
 
+# 한글 사이('개 인연금')와 구분자 뒤('- 오프라인') 양쪽을 다 잡는다.
+_LABEL_SPACE_RE = re.compile(r"(?<=[가-힣\-])\s+(?=[가-힣])")
+
+
+def _clean_label(v: str) -> str:
+    """class_label의 PDF 추출 흔적을 지운다.
+
+    원문 표에서 뽑을 때 한글 사이에 공백이 끼는 행이 28%다
+    ('개 인연금', '퇴 직연금', '오 프라인'). 이걸 그대로 프롬프트에 넣으면
+    LLM이 답변에도 그 띄어쓰기를 옮겨 적어서, 채점의 '개인연금' 문자열
+    매칭이 빗나간다. DB는 건드리지 않고 표시할 때만 정리한다.
+    """
+    return _LABEL_SPACE_RE.sub("", v)
+
+
 def format_sql_results(state: dict) -> str:
     """SQL 쿼리 결과를 프롬프트에 넣을 텍스트로 포맷한다."""
     rows = state.get("sql_rows")
@@ -768,8 +978,10 @@ def format_sql_results(state: dict) -> str:
 
     # 헤더
     cols = list(rows[0].keys())
-    # 프롬프트에 넣을 때 불필요한 컬럼은 숨긴다
-    skip = {"chunk_id", "page", "source_path", "class_code"}
+    # 프롬프트에 넣을 때 불필요한 컬럼은 숨긴다.
+    # class_code는 숨기지 않는다 — 답변에서 "C-P 클래스는 …"처럼 클래스를
+    # 특정해 말하려면 이 값이 프롬프트에 보여야 한다.
+    skip = {"chunk_id", "page", "source_path"}
     show = [c for c in cols if c not in skip]
 
     lines.append(" | ".join(show))
@@ -782,6 +994,8 @@ def format_sql_results(state: dict) -> str:
             v = r.get(c)
             if isinstance(v, float):
                 vals.append(f"{v:.4g}")
+            elif c == "class_label" and isinstance(v, str):
+                vals.append(_clean_label(v))
             else:
                 vals.append(str(v) if v is not None else "")
         lines.append(" | ".join(vals))
@@ -1034,6 +1248,16 @@ def compose(state: dict) -> dict:
             "있으면 그것으로 답하고, 부족한 부분만 확인되지 않는다고 "
             "밝히십시오.")
 
+        # 보수 DB를 조회했는데 해당 행이 없었던 경우.
+        # 이 사실을 알리지 않으면 LLM이 투자설명서 표 조각에서 숫자처럼
+        # 생긴 걸 주워 온다(실제로 총보수를 "BL292"라고 답한 적이 있다).
+        if state.get("sql_empty"):
+            user_suffix += (
+                "\n\n※ 보수 데이터베이스를 조회했으나 해당 펀드·클래스의 "
+                "행이 없었습니다. 검색 근거에 보수율이 명시돼 있지 않다면 "
+                "'확인되지 않는다'고 밝히십시오. 표 조각이나 셀 참조처럼 "
+                "보이는 문자열을 보수율인 것처럼 제시하지 마십시오.")
+
     messages = [
         {"role": "system",
          "content": SYSTEM_PROMPT.format(today=state.get("today") or date.today())},
@@ -1043,18 +1267,109 @@ def compose(state: dict) -> dict:
                     f"{user_suffix}"},
     ]
     t0 = time.monotonic()
-    try:
-        state["answer"] = call_hcx(messages, max_tokens=2000)
-        state["trace"].append(
-            f"compose: HCX-007로 답변 생성 (근거 {len(ev)}개, "
-            f"{time.monotonic()-t0:.1f}초)")
-    except Exception as e:                                   # noqa: BLE001
-        # 생성에 실패해도 빈손으로 돌려보내지 않는다.
-        # 부분적인 답이라도 200으로 주는 게 재시도를 소모하는 것보다 낫다.
-        state["error"] = str(e)
-        state["answer"] = fallback_answer(ev)
-        state["trace"].append(f"compose: 생성 실패({type(e).__name__}) → 근거 요약으로 대체")
+
+    # 남은 데드라인 예산 안에서 재시도한다.
+    # deadline_at이 없으면(단독 호출 등) DEADLINE 전체를 쓸 수 있다고 본다.
+    deadline_at = state.get("_deadline_at") or (t0 + DEADLINE)
+
+    global _consecutive_timeouts, _last_call_at
+
+    last_exc: Exception | None = None
+    max_toks = 2000
+    # 본문이 비어서(사고에 예산을 다 씀) 다시 부르는 건 빈도 제한과 무관한
+    # 실패다. 타임아웃 재시도 예산과 별도로 센다.
+    empty_retries = 0
+    attempt = 0
+    while attempt < HCX_MAX_ATTEMPTS + empty_retries:
+        attempt += 1
+        remaining = deadline_at - time.monotonic()
+        if remaining < HCX_MIN_BUDGET:
+            state["trace"].append(
+                f"compose: 남은 예산 {remaining:.0f}초 — 재시도 중단")
+            break
+
+        # 직전 호출과 너무 붙지 않게 한다. 빈도 제한을 다시 때리지 않기 위해서다.
+        gap = time.monotonic() - _last_call_at
+        if _last_call_at and gap < HCX_MIN_INTERVAL:
+            time.sleep(HCX_MIN_INTERVAL - gap)
+
+        call_timeout = int(min(HCX_CALL_TIMEOUT, remaining - 5))
+        _last_call_at = time.monotonic()
+
+        try:
+            state["answer"] = call_hcx(messages, max_tokens=max_toks,
+                                       timeout=call_timeout)
+            _consecutive_timeouts = 0        # 성공했으니 차단기를 푼다
+            note = "" if attempt == 1 else f", {attempt}번째 시도"
+            state["trace"].append(
+                f"compose: HCX-007로 답변 생성 (근거 {len(ev)}개, "
+                f"{time.monotonic()-t0:.1f}초{note})")
+            state.pop("error", None)
+            return state
+
+        except HCXEmptyContent as e:
+            # 200은 왔는데 사고에 토큰을 다 썼다. 예산만 늘리면 되는 문제라
+            # 타임아웃과 달리 차단기를 건드리지 않고 곧바로 다시 부른다.
+            last_exc = e
+            if empty_retries >= 2 or max_toks >= 8000:
+                state["trace"].append(
+                    f"compose: 본문이 계속 비어 있음(maxTokens {max_toks}) — 포기")
+                break
+            empty_retries += 1
+            max_toks = min(max_toks * 2, 8000)
+            state["trace"].append(
+                f"compose: {attempt}번째 시도 — 본문 비어 있음(사고에 토큰 소진) "
+                f"→ maxTokens {max_toks}로 재시도")
+            continue
+
+        except Exception as e:                               # noqa: BLE001
+            last_exc = e
+            timed_out = _is_retryable(e)
+            if timed_out:
+                _consecutive_timeouts += 1
+            state["trace"].append(
+                f"compose: {attempt}번째 시도 실패({type(e).__name__}, "
+                f"timeout={call_timeout}초, 연속실패 {_consecutive_timeouts})")
+
+            # 인증·파라미터 오류는 다시 걸어도 똑같다.
+            if not timed_out:
+                break
+
+            # 빈도 제한에 걸린 상태로 보이면 재시도를 포기한다.
+            # 여기서 더 던지면 뒤따르는 문항까지 같이 무너진다.
+            if _consecutive_timeouts >= HCX_BREAKER_THRESHOLD:
+                state["trace"].append(
+                    f"compose: 연속 타임아웃 {_consecutive_timeouts}회 "
+                    f"— 빈도 제한으로 보고 재시도 중단(차단기 작동)")
+                break
+
+            if attempt < HCX_MAX_ATTEMPTS + empty_retries:
+                time.sleep(HCX_RETRY_BACKOFF)
+
+    # 여기까지 왔으면 전부 실패했다.
+    # 그래도 빈손으로 돌려보내지 않는다 — 검색 근거라도 실어 보낸다.
+    state["error"] = str(last_exc) if last_exc else "생성 실패"
+    state["answer"] = fallback_answer(ev)
+    state["trace"].append(
+        f"compose: 생성 실패({type(last_exc).__name__ if last_exc else 'Unknown'}) "
+        f"→ 근거 요약으로 대체")
     return state
+
+
+def _is_retryable(e: Exception) -> bool:
+    """다시 걸어볼 만한 실패인지 판단한다.
+
+    타임아웃·연결 끊김·5xx·429는 재시도 가치가 있고,
+    인증 실패나 잘못된 파라미터는 몇 번을 걸어도 똑같다.
+    """
+    name = type(e).__name__
+    if name in ("ReadTimeout", "ConnectTimeout", "Timeout",
+                "ConnectionError", "ChunkedEncodingError"):
+        return True
+    msg = str(e)
+    if "HTTP 5" in msg or "HTTP 429" in msg:
+        return True
+    return False
 
 
 def fallback_answer(ev: list[dict]) -> str:
@@ -1152,7 +1467,8 @@ def run(question: str, question_id: str = "", use_cache: bool = True) -> dict:
 
     t0 = time.monotonic()
     state = {"question": question, "question_id": question_id,
-             "trace": [], "today": str(date.today())}
+             "trace": [], "today": str(date.today()),
+             "_deadline_at": t0 + DEADLINE}
 
     state = safety_check(state)
     if state.get("_blocked"):
