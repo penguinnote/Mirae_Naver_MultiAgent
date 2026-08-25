@@ -275,6 +275,12 @@ INST_HINTS = [
     "퇴직연금", "irp", "dc", "db", "연금저축", "중도인출", "세액공제", "압류",
     "부담금", "가입자교육", "규약", "실물이전", "계약이전", "디폴트옵션",
     "종합과세", "연금수령", "과세재원", "지연이자", "중간정산", "임원",
+    # ── 2026-08-25 추가 ────────────────────────────────────────
+    # IB1-C0CF9396("75세 연금소득세율 + 두 펀드 총보수 비교")이 제도 키워드
+    # 0개로 세어져 doc_type=투자설명서로 좁혀졌고, 정답인 doc38(연금소득세율
+    # 표)이 후보에서 통째로 빠졌다. 전체 검색이면 15위인데 필터가 배제한 것이다.
+    # 과세·세율 계열이 통째로 빠져 있었다.
+    "연금소득세", "세율", "과세", "원천징수", "isa", "사전조회",
 ]
 PROD_HINTS = [
     "펀드", "투자신탁", "총보수", "판매보수", "판매수수료", "위험등급",
@@ -651,9 +657,17 @@ class Retriever:
         # 복합 질문이면 제도·상품을 따로 검색해 합친다.
         # 한 쪽 문서군이 상위를 독식하는 것을 막는 것이 목적이다.
         if r.get("hybrid"):
-            half = max(2, TOP_K // 2)
-            inst_hits = self._fuse(q, state["query_emb"], fund, "연금문서")[:half]
-            prod_hits = self._fuse(q, state["query_emb"], fund, "투자설명서")[:half]
+            # 반씩 나누면 5위짜리 정답이 잘린다. 실측: IB1-10461FA3에서
+            # doc35(실물이전)가 제도 검색 5위였는데 4개만 가져와 탈락했다.
+            #
+            # SQL을 쓰는 질문이면 상품 쪽 수치는 DB가 주므로 투자설명서 청크가
+            # 덜 중요하다. 그만큼 제도 쪽에 자리를 더 준다.
+            if r.get("need_sql"):
+                inst_n, prod_n = TOP_K - 2, 2
+            else:
+                inst_n = prod_n = max(2, TOP_K // 2)
+            inst_hits = self._fuse(q, state["query_emb"], fund, "연금문서")[:inst_n]
+            prod_hits = self._fuse(q, state["query_emb"], fund, "투자설명서")[:prod_n]
             merged, seen = [], set()
             # 번갈아 담아 한 쪽이 앞자리를 다 차지하지 않게 한다
             for a, b in zip_longest(inst_hits, prod_hits):
@@ -672,7 +686,9 @@ class Retriever:
             if inst_hits and prod_hits:
                 state["trace"].append(
                     f"retrieve: 복합 질문 → 제도 {len(inst_hits)}개 + "
-                    f"상품 {len(prod_hits)}개로 나눠 검색")
+                    f"상품 {len(prod_hits)}개로 나눠 검색"
+                    + (" (SQL이 수치를 주므로 제도 비중↑)"
+                       if r.get("need_sql") else ""))
                 fused = merged
 
         # 필터를 걸었는데 결과가 빈약하면 필터 없이 다시 (잘못 좁힌 경우 대비)
