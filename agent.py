@@ -48,6 +48,7 @@ import re
 import sys
 import time
 from datetime import date
+from itertools import zip_longest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -67,7 +68,19 @@ from search import (  # noqa: E402
 
 CHAT_URL_DEFAULT = "https://clovastudio.stream.ntruss.com/v3/chat-completions/HCX-007"
 
-TOP_K = 5            # 평가 결과상 k=5가 최적 (k=20으로 늘려도 +2.8%p, 컨텍스트는 4배)
+# 2026-08-25: 5 → 8.
+#
+# 예전 평가셋에서는 k=5가 최적이었지만(k=20으로 늘려도 +2.8%p), 56문항 blind에서
+# 놓친 항목을 원인별로 나눠보니 **46%가 "문서는 갖고 있는데 상위 5개에 못 올린 것"**
+# 이었다. 데이터도 모델도 아닌 순위 문제다.
+#
+# 결정적인 사례: 문서 3개(45청크)를 추가한 것만으로 BM25 통계가 미세하게 바뀌어,
+# 정답이 든 청크가 1위에서 5위 밖으로 밀려 IB1-95267889가 100% → 0%가 됐다.
+# 5칸짜리 창이 너무 좁아 조금만 흔들려도 정답이 빠진다.
+#
+# 컨텍스트 여유는 충분하다 — 실측 평균 4,194자로 MAX_CONTEXT_CHARS(9,000)의
+# 절반이고 상한에 걸린 문항이 0개였다. k=8이면 평균 6,700자로 여전히 여유가 있다.
+TOP_K = 8
 EVIDENCE_CHARS = 1500  # 청크 하나당 프롬프트에 넣을 최대 길이
 DEADLINE = 240       # 주최측 타임아웃 300초 중 60초를 안전 마진으로 남긴다
 
@@ -427,13 +440,26 @@ def route(state: dict) -> dict:
     need_sql = _needs_sql(q)
     need_calc = _needs_calc(q)
 
+    # 제도와 상품을 **둘 다** 묻는 복합 질문인지 표시한다.
+    #
+    # 실측 문제: IB1-10461FA3("실물이전 사전조회는 어디서 + A-e 총보수는?")에서
+    # 검색 상위 8개가 전부 펀드 투자설명서로 채워져 제도 문서(doc35)가 하나도
+    # 안 들어왔다. 질문에 펀드명이 들어가면 벡터·BM25 양쪽에서 상품 문서가
+    # 점수를 독식하기 때문이다. 그 결과 제도 파트를 통째로 못 답했다.
+    # 복합 도메인이 56문항 중 가장 낮은 49.1%인 이유이기도 하다.
+    #
+    # → 한쪽이 독식하지 못하게 제도·상품을 나눠 검색하고 합친다.
+    hybrid = inst >= 1 and prod >= 1 and doc_type is None
+
     m = FUND_CODE_RE.search(q)
     state["route"] = {
         "doc_type": doc_type,
+        "hybrid": hybrid,
         "fund_code": m.group(0).upper() if m else None,
         "need_sql": need_sql,
         "need_calc": need_calc,
         "reason": f"제도 키워드 {inst}개 / 상품 키워드 {prod}개"
+                  + (", 복합" if hybrid else "")
                   + (", SQL 필요" if need_sql else "")
                   + (", 계산 필요" if need_calc else ""),
     }
@@ -566,6 +592,34 @@ class Retriever:
             })
         return out
 
+    def _fuse(self, q: str, query_emb, fund, doc_type):
+        """벡터 + BM25 결과를 RRF로 합쳐 순위를 매긴다.
+
+        doc_type을 바꿔가며 여러 번 부를 수 있도록 __call__에서 떼어냈다.
+        임베딩은 인자로 받으므로 몇 번을 불러도 CLOVA 호출은 늘지 않는다.
+        """
+        ranks: dict[str, dict[str, int]] = {}
+
+        res = self.col.query(query_embeddings=[query_emb], n_results=POOL,
+                             include=["metadatas"])
+        for i, (cid, md) in enumerate(zip(res["ids"][0], res["metadatas"][0])):
+            if matches(md, fund, doc_type, None):
+                ranks.setdefault(cid, {})["vec"] = i + 1
+
+        scores = self.bm25.get_scores(tokenize(q))
+        order = sorted(range(len(scores)), key=lambda i: -scores[i])[:POOL]
+        for rank, i in enumerate(order):
+            if scores[i] <= 0:
+                break
+            m = self.meta[i]
+            md = {k: v for k, v in m.items() if k != "text"}
+            md["doc_ids"] = "," + ",".join(md.get("doc_ids") or []) + ","
+            if matches(md, fund, doc_type, None):
+                ranks.setdefault(m["chunk_id"], {})["bm25"] = rank + 1
+
+        return sorted(ranks.items(),
+                      key=lambda kv: -sum(1.0 / (RRF_K + x) for x in kv[1].values()))
+
     def __call__(self, state: dict) -> dict:
         q = state["question"]
         r = state.get("route") or {}
@@ -592,26 +646,34 @@ class Retriever:
                 f"펀드별 검색 [{names}] → 상위 {len(ev)}개")
             return state
 
-        ranks: dict[str, dict[str, int]] = {}
-        res = self.col.query(query_embeddings=[state["query_emb"]], n_results=POOL,
-                             include=["metadatas"])
-        for i, (cid, md) in enumerate(zip(res["ids"][0], res["metadatas"][0])):
-            if matches(md, fund, doc_type, None):
-                ranks.setdefault(cid, {})["vec"] = i + 1
+        fused = self._fuse(q, state["query_emb"], fund, doc_type)
 
-        scores = self.bm25.get_scores(tokenize(q))
-        order = sorted(range(len(scores)), key=lambda i: -scores[i])[:POOL]
-        for rank, i in enumerate(order):
-            if scores[i] <= 0:
-                break
-            m = self.meta[i]
-            md = {k: v for k, v in m.items() if k != "text"}
-            md["doc_ids"] = "," + ",".join(md.get("doc_ids") or []) + ","
-            if matches(md, fund, doc_type, None):
-                ranks.setdefault(m["chunk_id"], {})["bm25"] = rank + 1
-
-        fused = sorted(ranks.items(),
-                       key=lambda kv: -sum(1.0 / (RRF_K + x) for x in kv[1].values()))
+        # 복합 질문이면 제도·상품을 따로 검색해 합친다.
+        # 한 쪽 문서군이 상위를 독식하는 것을 막는 것이 목적이다.
+        if r.get("hybrid"):
+            half = max(2, TOP_K // 2)
+            inst_hits = self._fuse(q, state["query_emb"], fund, "연금문서")[:half]
+            prod_hits = self._fuse(q, state["query_emb"], fund, "투자설명서")[:half]
+            merged, seen = [], set()
+            # 번갈아 담아 한 쪽이 앞자리를 다 차지하지 않게 한다
+            for a, b in zip_longest(inst_hits, prod_hits):
+                for item in (a, b):
+                    if item and item[0] not in seen:
+                        seen.add(item[0])
+                        merged.append(item)
+            # 어느 한쪽이 비면(예: 제도 문서가 안 잡힘) 전체 검색으로 메운다
+            if len(merged) < TOP_K:
+                for item in fused:
+                    if item[0] not in seen:
+                        seen.add(item[0])
+                        merged.append(item)
+                    if len(merged) >= TOP_K:
+                        break
+            if inst_hits and prod_hits:
+                state["trace"].append(
+                    f"retrieve: 복합 질문 → 제도 {len(inst_hits)}개 + "
+                    f"상품 {len(prod_hits)}개로 나눠 검색")
+                fused = merged
 
         # 필터를 걸었는데 결과가 빈약하면 필터 없이 다시 (잘못 좁힌 경우 대비)
         if len(fused) < 3 and (doc_type or fund):
@@ -1143,6 +1205,18 @@ SYSTEM_PROMPT = """당신은 미래에셋증권의 연금 상담 전문가입니
 답하면 그것도 틀린 답변입니다. 반대로, 근거에 없는 내용을 그럴듯하게 지어내는 것은
 더 위험합니다. 둘 사이에서 ①을 기본으로 삼으십시오.
 
+[규칙 1-b — "확인되지 않는다"고 쓴 뒤 아는 수치를 덧붙이지 않는다]  ★
+근거에서 못 찾았다고 밝힌 다음, "일반적으로 ○○입니다"라며 기억나는 수치를
+덧붙이지 마십시오. 제도는 자주 개정되므로 그 수치는 옛날 값일 가능성이 높고,
+틀린 수치를 제시하면 "모른다"보다 훨씬 나쁜 답변이 됩니다.
+
+    나쁨: "근거에서 확인되지 않습니다. 일반적으로 합산 한도는 700만원입니다."
+          (실제로는 900만원으로 개정됨 → 확실한 오답이 된다)
+    좋음: "합산 한도는 제공된 자료에서 확인되지 않습니다."
+
+근거 자료에 수치가 있으면 그 수치가 항상 우선입니다. 기억 속의 값과 다르더라도
+근거를 따르십시오.
+
 [규칙 2 — 근거의 결론을 뒤집지 않는다]
 근거가 "불가능하다", "제한된다", "금지된다"라고 서술하면 그 결론을 그대로
 유지하십시오. 부정적 결론을 긍정으로 바꾸거나 완화하지 마십시오.
@@ -1170,9 +1244,28 @@ SYSTEM_PROMPT = """당신은 미래에셋증권의 연금 상담 전문가입니
 요약하느라 이런 항목을 생략하면 답변이 틀린 것으로 간주됩니다.
 근거에 두 가지 경우(예: 일반 퇴직연금 vs 과학기술인연금)가 나오면 둘 다 쓰십시오.
 
-[규칙 4 — 출처를 표기한다]
-모든 수치와 조건에는 출처를 함께 적으십시오.
-    형식: (문서명 N쪽) 또는 (펀드명 투자설명서 N쪽, 기준일 YYYY-MM-DD)
+[규칙 4 — 출처와 위치를 반드시 표기한다]  ★채점 항목
+근거 자료의 각 블록은 이런 첫 줄로 시작합니다.
+    [근거 3] doc55 1쪽
+    [근거 5] 하나파워e단기채증권자투자신탁[채권] 5쪽 (기준일 2025-05-16)
+
+**"[근거 3]" 같은 번호는 내부 표시일 뿐이므로 답변에 쓰지 마십시오.**
+답변을 읽는 사람에게는 아무 의미가 없습니다. 번호 대신 그 뒤에 적힌
+**문서명과 쪽수**를 옮겨 적으십시오.
+
+    나쁨: "이는 [근거 3]에서 확인할 수 있습니다."
+    좋음: "이는 doc55 1쪽에서 확인할 수 있습니다."
+    나쁨: "[근거 5]에 따르면 총보수는 0.25%입니다."
+    좋음: "총보수는 0.25%입니다(하나파워e단기채 투자설명서 5쪽)."
+
+  · 인용하는 수치·조건마다 괄호로 출처를 답니다.
+  · 첫 줄에 쪽수가 없으면(docx·xlsx·pptx) 문서명과 함께 본문에 보이는
+    절·표·슬라이드·항목명을 씁니다.  예) (doc33 슬라이드 5 · Q5)
+  · 두 상품을 비교했다면 두 투자설명서의 쪽수를 모두 씁니다.
+  · SQL 조회 결과에서 가져온 수치는 어느 펀드·클래스인지 명시합니다.
+        (미래에셋프리미엄크레딧알파 C-P, 보수 DB)
+
+없는 쪽수를 지어내지는 마십시오. 근거에 위치가 없으면 문서명만 적습니다.
 
 [규칙 5 — 정보가 부족해도 답변을 포기하지 않는다]
 5-a) 질문이 둘 중 하나로 갈리는 정도로 모호하면(예: 어느 계좌인지 안 밝힘)
@@ -1257,6 +1350,27 @@ def compose(state: dict) -> dict:
                 "행이 없었습니다. 검색 근거에 보수율이 명시돼 있지 않다면 "
                 "'확인되지 않는다'고 밝히십시오. 표 조각이나 셀 참조처럼 "
                 "보이는 문자열을 보수율인 것처럼 제시하지 마십시오.")
+
+    # ── 마지막에 한 번 더 못 박는다 ────────────────────────────────
+    # 시스템 프롬프트가 3천 자를 넘다 보니 뒤쪽 규칙이 묻힌다. 실측으로
+    # 확인된 두 가지 실패가 그 결과였다.
+    #   · 출처 표기: 6문항 중 1개만 쪽수를 적었다. SQL 결과가 있으면
+    #     "SQL 조회 결과에 따르면"만 쓰고 문서 출처를 통째로 건너뛴다.
+    #   · 사전지식 수치: "근거에 없습니다" 뒤에 기억나는 700만원을 덧붙였다
+    #     (실제로는 900만원으로 개정됨 → 모른다고 하느니 못한 오답).
+    # 생성 직전에 읽는 자리로 옮기면 지켜질 확률이 올라간다.
+    user_suffix += (
+        "\n\n[답변 전 최종 확인]\n"
+        "1) 인용한 수치·조건마다 출처를 괄호로 답니다. 근거 블록 첫 줄의 "
+        "문서명과 쪽수를 그대로 옮기십시오. "
+        "예) (doc54 4쪽), (하나파워e단기채 투자설명서 5쪽)\n"
+        "   · '[근거 3]' 같은 번호만 쓰지 마십시오. 읽는 사람에게 의미가 "
+        "없습니다.\n"
+        "   · SQL 결과를 인용할 때도 함께 참고한 문서의 쪽수를 답니다.\n"
+        "2) 근거에서 못 찾은 항목은 '확인되지 않습니다'로 끝내십시오. "
+        "기억나는 수치를 '일반적으로 ○○입니다'라며 덧붙이지 마십시오 — "
+        "제도는 자주 개정되어 그 값이 틀리면 확실한 오답이 됩니다."
+    )
 
     messages = [
         {"role": "system",

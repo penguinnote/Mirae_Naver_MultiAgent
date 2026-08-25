@@ -58,3 +58,4 @@ leakage_*.json
 diag_api*.py
 verify_fix*.py
 check_chunks.py
+spotcheck.py
