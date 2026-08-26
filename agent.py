@@ -315,6 +315,17 @@ SQL_AGG = ["평균", "몇 개", "몇개", "총 몇", "얼마나 저렴", "얼마
            "얼마나 차이"]
 SQL_FIELD = ["총보수", "수수료", "보수", "판매보수", "판매수수료"]
 
+# 클래스의 **속성**(계좌유형·판매경로)을 묻는 질문도 DB가 답을 갖고 있다.
+# fund_fees 테이블에 account_type('연금저축'/'퇴직연금')과
+# channel('온라인'/'오프라인'/'온라인슈퍼')이 들어 있다.
+#
+# 실측: IB1-79E75141("C-P가 퇴직연금용 클래스인지 확인해 주세요")은 수수료
+# 단어가 없어 SQL이 안 켜졌고, 모델이 투자설명서 문구를 잘못 읽어
+# "퇴직연금용"이라고 답했다. DB에는 account_type='연금저축'으로 정확히 있다.
+# 채점 기준이 WRONG 예시로 든 "연금저축 클래스를 퇴직연금이라고 답함"이다.
+SQL_CLASS_ATTR = ["계좌", "판매경로", "연금저축", "퇴직연금", "개인연금",
+                  "온라인", "오프라인", "전용", "용 클래스", "용클래스"]
+
 FUND_FEES_DB = str(Path(__file__).resolve().parent / "dataset" / "fund_fees.sqlite")
 
 
@@ -341,13 +352,18 @@ def _needs_sql(question: str) -> bool:
     손해가 작다.
     """
     low = question.lower()
-    has_field = any(f in low for f in SQL_FIELD)
-    if not has_field:
+    has_class = "클래스" in question or bool(_CLASS_CODE_RE.search(question))
+
+    # 클래스를 지목하면서 그 속성(계좌유형·판매경로)을 묻는 질문.
+    # 수수료 단어가 없어도 DB가 답을 갖고 있으므로 켠다.
+    if has_class and any(a in low for a in SQL_CLASS_ATTR):
+        return True
+
+    if not any(f in low for f in SQL_FIELD):
         return False
     has_compare = any(c in low for c in SQL_COMPARE)
     has_sort = any(s in low for s in SQL_SORT)
     has_agg = any(a in low for a in SQL_AGG)
-    has_class = "클래스" in question or bool(_CLASS_CODE_RE.search(question))
     return has_compare or has_sort or has_agg or has_class
 
 
@@ -593,6 +609,10 @@ class Retriever:
                 "fund_code": m.get("fund_code"),
                 "page": m.get("page"),
                 "base_date": m.get("base_date"),
+                # section은 청크의 99%(14,562/14,745)에 채워져 있는데
+                # 여태 프롬프트로 전달하지 않았다. 쪽 개념이 없는
+                # docx·pptx·xlsx의 출처 표기는 이 값이 유일한 단서다.
+                "section": m.get("section"),
                 "source_path": m.get("source_path"),
                 "found_by": "+".join(src.keys()),
             })
@@ -709,6 +729,10 @@ class Retriever:
                 "fund_code": m.get("fund_code"),
                 "page": m.get("page"),
                 "base_date": m.get("base_date"),
+                # section은 청크의 99%(14,562/14,745)에 채워져 있는데
+                # 여태 프롬프트로 전달하지 않았다. 쪽 개념이 없는
+                # docx·pptx·xlsx의 출처 표기는 이 값이 유일한 단서다.
+                "section": m.get("section"),
                 "source_path": m.get("source_path"),
                 "found_by": "+".join(src.keys()),
             })
@@ -822,8 +846,9 @@ CREATE TABLE fund_fees (
   6. NULL 비교에 = 나 != 를 쓰지 마십시오. IS NULL / IS NOT NULL을 쓰십시오
   7. 질문이 "연금 펀드"라고만 하면 account_type으로 좁히지 마십시오.
      '연금저축', '퇴직연금'을 명시했을 때만 필터하십시오
-  8. SELECT에 fund_name, class_code, class_label, fee_total은 기본으로
-     포함하십시오. 사용자가 결과를 검증할 수 있어야 합니다"""
+  8. SELECT에 fund_name, class_code, class_label, fee_total, **page** 를
+     기본으로 포함하십시오. page는 그 수치가 실린 투자설명서 쪽수이며
+     답변에 출처로 적어야 하므로 반드시 함께 가져오십시오"""
 
 
 _DANGEROUS_KW = re.compile(
@@ -1059,7 +1084,11 @@ def format_sql_results(state: dict) -> str:
     # 프롬프트에 넣을 때 불필요한 컬럼은 숨긴다.
     # class_code는 숨기지 않는다 — 답변에서 "C-P 클래스는 …"처럼 클래스를
     # 특정해 말하려면 이 값이 프롬프트에 보여야 한다.
-    skip = {"chunk_id", "page", "source_path"}
+    #
+    # page도 숨기지 않는다. fund_fees의 page는 363/363 채워져 있고 정답지가
+    # 지정한 쪽수와 일치한다(표본 4/4). 이 값을 감춰두는 바람에 답변이
+    # 보수율을 인용하면서 엉뚱한 쪽(수익률 표 등)을 적고 있었다.
+    skip = {"chunk_id", "source_path"}
     show = [c for c in cols if c not in skip]
 
     lines.append(" | ".join(show))
@@ -1297,6 +1326,21 @@ SYSTEM_PROMPT = """당신은 미래에셋증권의 연금 상담 전문가입니
      이 API는 단발성 요청이라 되물어도 답을 받을 수 없습니다. 정보 부족을
      이유로 답변 자체를 생략하거나 질문만 던지고 끝내지 마십시오.
 
+[규칙 6 — 분류를 물으면 표준 분류어로 답한다]
+상품유형·위험등급처럼 정해진 분류 체계가 있는 것은 그 체계의 용어를
+그대로 씁니다. 근거를 풀어 설명하는 것으로 대신하지 마십시오.
+
+    질문: "어떤 상품유형인가요?"
+    나쁨: "채권을 주된 투자대상으로 하며 신탁재산의 60% 이상을 투자합니다"
+    좋음: "**채권형**입니다. (채권을 주된 투자대상으로 하며 60% 이상 투자)"
+
+  · 상품유형: 주식형 / 채권형 / 혼합형 (펀드명 끝의 [주식]·[채권] 표기가 근거)
+  · 위험등급: "N등급(설명)" 형태로 숫자와 문구를 함께 씁니다.
+    예) 5등급(낮은 위험)
+  · 클래스 계좌유형: 연금저축 / 퇴직연금, 판매경로: 온라인 / 오프라인
+
+분류어를 먼저 말하고, 부연 설명은 그 뒤에 붙이십시오.
+
 [형식]
 - 핵심 답변을 먼저 쓰고, 그다음 조건·예외·근거를 설명합니다.
 - 불릿으로 정리하면 읽기 좋습니다.
@@ -1311,6 +1355,11 @@ def format_evidence(ev: list[dict]) -> str:
         head = f"[근거 {i}] {who}"
         if e.get("page"):
             head += f" {e['page']}쪽"
+        # 쪽수가 없거나(docx·pptx) 쪽수만으로 위치를 특정하기 어려울 때
+        # 절 제목이 출처 표기의 단서가 된다. 정답지도 docx 출처는
+        # "§ 세액공제 표", "section 36 · DC 퇴직 > …" 처럼 절로 지정한다.
+        if e.get("section"):
+            head += f" · {e['section']}"
         if e.get("base_date"):
             head += f" (기준일 {e['base_date']})"
         out.append(f"{head}\n{e['text']}")
@@ -1544,6 +1593,8 @@ def to_response(state: dict) -> dict:
         head = f"[{e['chunk_id']}] {who}"
         if e.get("page"):
             head += f" · {e['page']}쪽"
+        if e.get("section"):
+            head += f" · {e['section']}"
         if e.get("base_date"):
             head += f" · 기준일 {e['base_date']}"
         block = f"{head}\n{e['text']}"

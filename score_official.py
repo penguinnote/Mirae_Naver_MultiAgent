@@ -227,13 +227,18 @@ def score_one(gq: dict, r: dict | None) -> dict:
     # ── C. 출처 / locator ────────────────────────────────────
     gsrc = gq.get("sources", [])
     s_hit = l_hit = 0
+    # 정답지 자체에 locator가 없는 출처(71개 중 6개)는 분모에서 뺀다.
+    # 밝힐 위치가 없는데 0점을 주면 locator 재현율이 부당하게 낮아진다.
+    l_tot = 0
     src_detail = []
     for s in gsrc:
         names = [s.get("file", "")] + list(s.get("aliases", []))
         # 확장자를 뗀 이름도 후보에 넣는다 (doc38.docx → doc38)
         names += [Path(n).stem for n in names if n]
         found = any(ns(n) and ns(n) in ns(cite_hay) for n in names)
-        loc = s.get("locator", "") or ""
+        loc = (s.get("locator") or "").strip()
+        if loc:
+            l_tot += 1
         loc_found = False
         if found and loc:
             mpage = re.search(r"p\.?\s*(\d+)", loc)
@@ -251,7 +256,7 @@ def score_one(gq: dict, r: dict | None) -> dict:
                            "locator": loc, "locator_found": loc_found})
 
     out["source_recall"] = (s_hit / len(gsrc)) if gsrc else None
-    out["locator_recall"] = (l_hit / len(gsrc)) if gsrc else None
+    out["locator_recall"] = (l_hit / l_tot) if l_tot else None
     out["sources_detail"] = src_detail
 
     # ── 상태 판정 ────────────────────────────────────────────
