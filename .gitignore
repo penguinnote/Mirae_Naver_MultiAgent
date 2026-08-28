@@ -48,8 +48,12 @@ _to_delete/
 # scored_*.json 에는 비공개 정답(gold_answer)이 그대로 들어갑니다.
 # 공개 repo에 올라가면 팀 blind 평가가 무효가 됩니다.
 gold_private_*.json
+gold_holdout_*.json
+killing_camp_*.json
+# 실행 결과는 전부 정답지에서 파생된다. 이름을 하나씩 막다 보니 계속
+# 새어서(raw_penguinnote_v4.json 등) raw_ 로 시작하는 json은 통째로 막는다.
+raw_*.json
 scored_*.json
-raw_*_integrated_*.json
 questions_only_*.json
 blind_runner*.py
 leakage_*.json
@@ -58,4 +62,4 @@ leakage_*.json
 diag_api*.py
 verify_fix*.py
 check_chunks.py
-spotcheck.py
+spotcheck*.py
