@@ -2199,60 +2199,73 @@ def _cut_paren_cites(text: str) -> tuple[str, int]:
     return "".join(out), n
 
 
+def _cut_all(text: str) -> tuple[str, int]:
+    t, n = _cut_paren_cites(text)
+    t, k = _REF_RE.subn("", t); n += k
+    t, k = _DOC_BARE.subn("", t); n += k
+    t, k = _BARE_PAGE.subn("", t); n += k
+    return t, n
+
+
+# 출처를 지우면 조사만 덩그러니 남는다. "(doc35 1쪽)에 따르면" → " 에 따르면".
+# 한국어에서 '에/에서'는 반드시 앞말에 붙으므로, 앞이 비어 있으면 미아다.
+_TIDY = [
+    (re.compile(r'"\s*"'), ""),
+    (re.compile(r"(?<![가-힣A-Za-z0-9])에\s*따르면[,]?\s*"), ""),
+    (re.compile(r"(?<![가-힣A-Za-z0-9])에서도?[,]?\s+"), ""),
+    (re.compile(r"^\s*(?:[-·*]\s*)+$", re.M), ""),
+    (re.compile(r"\(\s*\)"), ""),
+    (re.compile(r"^[\s\-·]*[:：]\s*", re.M), ""),
+    (re.compile(r"(\d+\.)\s*[:：]\s*"), r"\1 "),
+    (re.compile(r"[ \t]{2,}"), " "),
+    (re.compile(r"\s+([,.)])"), r"\1"),
+    (re.compile(r"(?:,\s*)+([,.])"), r"\1"),
+    (re.compile(r"\n{3,}"), "\n\n"),
+]
+_SENT_PARTS = re.compile(r"(?<=니다\.)\s*|(?<=[.!?])\s+")
+
+
 def _strip_citations(answer: str) -> tuple[str, int]:
     """본문의 문서명·쪽수 표기를 걷어낸다. 사실·수치는 건드리지 않는다.
 
-    표기만 지우면 "이는 (doc46 1쪽), (doc55 1쪽) 등에서 일관되게 언급되고
-    있으며" 가 "이는, 등에서 일관되게 언급되고 있으며" 라는 껍데기로 남는다.
-    그래서 **출처가 있던 문장 단위로 보고**, 표기를 뺀 나머지가 내용이라고
-    할 수 없을 만큼 짧으면 그 문장을 통째로 버린다.
+    **줄 → 문장 순으로 원문을 쪼갠 뒤 각 조각에서 지운다.** 전체를 먼저 지우고
+    나중에 문장을 맞춰 세려 하면 경계가 밀려 엉뚱한 문장을 버린다.
+
+    문장을 통째로 버리는 조건은 둘 다 만족할 때뿐이다.
+      ① 지운 자리에 숫자가 하나도 없다 (사실이 없다는 뜻)
+      ② 남은 말이 "어디에 적혀 있다"는 연결어뿐이다
+    한 번 크게 틀렸던 자리다 — 처음엔 길이만 봤다가 실측(H2-13)에서
+    "- 최근 1년차 수익률: 9.28% (doc54 7쪽)" 줄이 통째로 날아갔다.
+    **수치가 든 줄을 지우는 것은 출처를 남기는 것보다 훨씬 나쁘다.**
     """
     if not answer:
         return answer, 0
 
-    stripped, n = _cut_paren_cites(answer)
-    stripped, k = _REF_RE.subn("", stripped)
-    n += k
-    stripped, k = _DOC_BARE.subn("", stripped)
-    n += k
-    stripped, k = _BARE_PAGE.subn("", stripped)
-    n += k
-    if not n:
+    total = 0
+    lines = []
+    for line in answer.split("\n"):
+        kept = []
+        for piece in _SENT_PARTS.split(line):
+            cut, n = _cut_all(piece)
+            total += n
+            if n:
+                body = "".join(_CONTENT.findall(cut))
+                if (not any(c.isdigit() for c in cut)
+                        and len(body) < 60 and _BOILERPLATE.search(cut)):
+                    continue                      # 출처만 있던 문장
+            kept.append(cut.strip())
+        lines.append(" ".join(x for x in kept if x))
+
+    if not total:
         return answer, 0
 
-    # 출처를 지우고 껍데기만 남은 문장을 버린다.
-    #
-    # ⚠ 여기서 한 번 크게 틀렸다. 처음에는 "남은 글자가 14자 미만이면 버린다"로
-    # 했는데, 실측(H2-13)에서 "- 최근 1년차 수익률: 9.28% (doc54 7쪽)" 줄이
-    # 통째로 날아갔다. 남은 본문이 13자였기 때문이다. **수치가 든 줄을 지우는
-    # 것은 출처를 남기는 것보다 훨씬 나쁘다.**
-    #
-    # 그래서 두 조건을 모두 만족할 때만 버린다.
-    #   ① 지우고 난 자리에 숫자가 하나도 없다 (사실이 없다는 뜻)
-    #   ② 남은 말이 "어디에 적혀 있다"는 연결어뿐이다
-    keep, dropped = [], 0
-    parts_a, parts_b = _SENT_SPLIT.split(answer), _SENT_SPLIT.split(stripped)
-    for before, after in zip(parts_a, parts_b):
-        had_cite = len(before) - len(after) > 3
-        body = "".join(_CONTENT.findall(after))
-        if (had_cite and not any(c.isdigit() for c in after)
-                and len(body) < 60 and _BOILERPLATE.search(after)):
-            dropped += 1
-            continue
-        keep.append(after)
-    if dropped and len(parts_a) == len(parts_b):
-        stripped = "\n".join(s for s in keep if s.strip())
-
-    for pat, rep in ((re.compile(r"\(\s*\)"), ""),
-                     (re.compile(r"[ \t]{2,}"), " "),
-                     (re.compile(r"\s+([,.)])"), r"\1"),
-                     (re.compile(r"(?:,\s*)+([,.])"), r"\1"),
-                     (re.compile(r"^[\s\-·]*[:：]\s*", re.M), ""),
-                     (re.compile(r"(\d+\.)\s*[:：]\s*"), r"\1 "),
-                     (re.compile(r"\n{3,}"), "\n\n")):
-        stripped = pat.sub(rep, stripped)
-    stripped = "\n".join(l.rstrip() for l in stripped.split("\n")).strip()
-    return stripped, n
+    out = "\n".join(lines)
+    # 두 번 돌린다. 앞 규칙이 지운 자리에서 뒷 규칙의 대상이 새로 생긴다
+    # (예: 출처를 지워 빈 따옴표가 되고, 그 뒤 공백 정리로 '""'가 완성됨).
+    for _ in range(2):
+        for pat, rep in _TIDY:
+            out = pat.sub(rep, out)
+    return "\n".join(l.rstrip() for l in out.split("\n")).strip(), total
 
 
 def _dedupe_citations(answer: str) -> tuple[str, int]:
