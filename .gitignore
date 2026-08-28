@@ -63,3 +63,7 @@ diag_api*.py
 verify_fix*.py
 check_chunks.py
 spotcheck*.py
+
+# 공유용 리포트는 --hide-gold 를 안 붙이면 정답이 그대로 들어간다.
+# 파일명 하나씩 막다 계속 샜던 전례가 있어 패턴으로 통째로 막는다.
+공유_*.md
