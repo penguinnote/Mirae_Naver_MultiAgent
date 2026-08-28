@@ -1774,28 +1774,34 @@ SYSTEM_PROMPT = """당신은 미래에셋증권의 연금 상담 전문가입니
 한 항목을 통째로 누락한 사례가 있습니다.
 한 항목이라도 근거에서 못 찾았다면 그 항목만 "확인되지 않습니다"라고 밝히십시오.
 
-[규칙 4 — 출처와 위치를 반드시 표기한다]  ★채점 항목
+[규칙 4 — 답변 본문에 출처 표시를 넣지 않는다]
 근거 자료의 각 블록은 이런 첫 줄로 시작합니다.
     [근거 3] doc55 1쪽
     [근거 5] 하나파워e단기채증권자투자신탁[채권] 5쪽 (기준일 2025-05-16)
 
-**"[근거 3]" 같은 번호는 내부 표시일 뿐이므로 답변에 쓰지 마십시오.**
-답변을 읽는 사람에게는 아무 의미가 없습니다. 번호 대신 그 뒤에 적힌
-**문서명과 쪽수**를 옮겨 적으십시오.
+이 첫 줄은 **시스템 내부 표시**입니다. 답변에 옮기지 마십시오.
+`[근거 3]`, `doc55`, `1쪽` 같은 표시는 상담을 받는 사람에게 아무 의미가
+없습니다. 그 사람은 doc55가 무슨 문서인지 모르고, 애초에 자료를 갖고
+있지도 않습니다. 출처는 시스템이 별도 항목으로 따로 제출하므로,
+본문에서 다시 밝힐 필요가 없습니다.
 
-    나쁨: "이는 [근거 3]에서 확인할 수 있습니다."
-    좋음: "이는 doc55 1쪽에서 확인할 수 있습니다."
-    나쁨: "[근거 5]에 따르면 총보수는 0.25%입니다."
-    좋음: "총보수는 0.25%입니다(하나파워e단기채 투자설명서 5쪽)."
+    나쁨: "이는 doc55 1쪽에서 확인할 수 있습니다."
+    나쁨: "총보수는 0.25%입니다(하나파워e단기채 투자설명서 5쪽)."
+    나쁨: "이는 (doc46 1쪽), (doc55 1쪽) 등에서 일관되게 언급됩니다."
+    좋음: "총보수는 0.25%입니다."
 
-  · 인용하는 수치·조건마다 괄호로 출처를 답니다.
-  · 첫 줄에 쪽수가 없으면(docx·xlsx·pptx) 문서명과 함께 본문에 보이는
-    절·표·슬라이드·항목명을 씁니다.  예) (doc33 슬라이드 5 · Q5)
-  · 두 상품을 비교했다면 두 투자설명서의 쪽수를 모두 씁니다.
-  · SQL 조회 결과에서 가져온 수치는 어느 펀드·클래스인지 명시합니다.
-        (미래에셋프리미엄크레딧알파 C-P, 보수 DB)
+⚠ **출처 표시를 빼는 것이지 사실을 빼는 것이 아닙니다.** 근거에 있는
+수치·기한·조건·절차·예외는 규칙 1대로 전부 그대로 옮기십시오. 지우는 것은
+문서 이름과 쪽수뿐입니다.
 
-없는 쪽수를 지어내지는 마십시오. 근거에 위치가 없으면 문서명만 적습니다.
+  · 어느 문서에서 왔는지 밝히는 문장("~에서 확인할 수 있습니다",
+    "~에 명시되어 있습니다") 자체를 쓰지 마십시오. 근거 없이 답하지 않는 것은
+    이미 규칙 1이 보장합니다.
+  · 다만 **상품명·클래스·계좌유형처럼 답의 내용에 필요한 고유명사**는
+    당연히 씁니다. 예) "미래에셋프리미엄크레딧알파 C-P 클래스의 총보수는
+    0.33%입니다." — 이건 출처 표시가 아니라 답의 일부입니다.
+  · 제도명, 법령명, 기관명(예: 근로자퇴직급여보장법, 금융감독원)도
+    답의 내용이므로 그대로 씁니다.
 
 [규칙 5 — 정보가 부족해도 답변을 포기하지 않는다]
 5-a) 질문이 둘 중 하나로 갈리는 정도로 모호하면(예: 어느 계좌인지 안 밝힘)
@@ -2136,6 +2142,119 @@ _CITE_RUN_RE = re.compile(
     rf"(?:{_CITE_ONE})(?:\s*(?:,|와|과|및)?\s*(?:{_CITE_ONE}))+")
 
 
+# 답변 본문에서 출처 표시를 걷어낸다.
+#
+# 왜: 상담을 받는 사람은 doc46이 무슨 문서인지 모르고 자료도 갖고 있지 않다.
+# 채점상으로도 잃는 것이 없다 — 대회 공식 문서(FAIRNESS_AND_SCORING.md)는
+# "C. Source Document Recall: 정답 원문 파일을 **sources 또는
+# retrieved_context에서** 정확히 식별했는지"로 정의한다. 답변 본문이 아니다.
+# 우리 retrieved_context는 이미 "[doc46_p1_0001] doc46 · 1쪽 · [섹션]"
+# 형태로 문서·쪽을 싣고 있다.
+#
+# 규칙 4로 모델에게 쓰지 말라고 했지만 그것만 믿지 않는다. 프롬프트로 세 번
+# 금지했는데도 [근거 N]이 계속 나왔던 전례가 있다.
+_REF_RE = re.compile(r"\s*\[근거\s*\d+\]")
+_PAGE_IN = re.compile(r"\d+\s*쪽|슬라이드\s*\d+|^doc\d+\b")
+_DOC_BARE = re.compile(r"\s*\(?\bdoc\d+\b(?:\s+\d+\s*쪽)?\)?")
+# 모델이 근거 블록 머리글을 괄호 없이 그대로 베껴 오기도 한다. 실측(H2-12):
+#   "미래에셋프리미엄크레딧알파증권자투자신탁(채권) 28쪽 · ⑧장외파생상품:"
+# 'N쪽'은 본문에 쓰일 일이 없는 표기라 이 닻으로 잡는다.
+_BARE_PAGE = re.compile(
+    r"[^\s,:;()]{1,60}(?:\([^()\n]{0,20}\))?\s*\d+\s*쪽"
+    r"(?:\s*·\s*[^\n:,]{1,40})?")
+_SENT_SPLIT = re.compile(r"(?<=[.!?])\s+|(?<=니다\.)\s*|\n")
+_CONTENT = re.compile(r"[가-힣A-Za-z0-9]")
+# "어디에 적혀 있다"는 뜻의 연결어. 이것만 남았다면 알맹이가 없는 문장이다.
+_BOILERPLATE = re.compile(
+    r"확인할 수 있|확인됩니다|확인되고|언급되|명시되|기재되|나와 ?있|"
+    r"참조|참고하|근거로 ?하|따르면|에서 확인")
+
+
+def _cut_paren_cites(text: str) -> tuple[str, int]:
+    """괄호를 **짝을 세어가며** 훑어 출처 괄호만 통째로 들어낸다.
+
+    정규식으로는 안 된다. 실측(홀드아웃 v2 H2-05)에서
+    "(미래에셋프리미엄크레딧알파증권자투자신탁(채권) 1쪽 · 나. 투자설명서
+    (기준일 2025-12-23))" 처럼 **괄호가 겹쳐 있는** 출처가 나온다.
+    """
+    out, i, n, depth, start = [], 0, 0, 0, -1
+    for i, ch in enumerate(text):
+        if ch == "(":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == ")" and depth:
+            depth -= 1
+            if depth == 0:
+                inner = text[start + 1:i]
+                if _PAGE_IN.search(inner) and len(inner) <= 140:
+                    n += 1                       # 출처 괄호 — 버린다
+                else:
+                    out.append(text[start:i + 1])
+                start = -1
+        elif depth == 0:
+            out.append(ch)
+    if depth and start >= 0:
+        out.append(text[start:])
+    return "".join(out), n
+
+
+def _strip_citations(answer: str) -> tuple[str, int]:
+    """본문의 문서명·쪽수 표기를 걷어낸다. 사실·수치는 건드리지 않는다.
+
+    표기만 지우면 "이는 (doc46 1쪽), (doc55 1쪽) 등에서 일관되게 언급되고
+    있으며" 가 "이는, 등에서 일관되게 언급되고 있으며" 라는 껍데기로 남는다.
+    그래서 **출처가 있던 문장 단위로 보고**, 표기를 뺀 나머지가 내용이라고
+    할 수 없을 만큼 짧으면 그 문장을 통째로 버린다.
+    """
+    if not answer:
+        return answer, 0
+
+    stripped, n = _cut_paren_cites(answer)
+    stripped, k = _REF_RE.subn("", stripped)
+    n += k
+    stripped, k = _DOC_BARE.subn("", stripped)
+    n += k
+    stripped, k = _BARE_PAGE.subn("", stripped)
+    n += k
+    if not n:
+        return answer, 0
+
+    # 출처를 지우고 껍데기만 남은 문장을 버린다.
+    #
+    # ⚠ 여기서 한 번 크게 틀렸다. 처음에는 "남은 글자가 14자 미만이면 버린다"로
+    # 했는데, 실측(H2-13)에서 "- 최근 1년차 수익률: 9.28% (doc54 7쪽)" 줄이
+    # 통째로 날아갔다. 남은 본문이 13자였기 때문이다. **수치가 든 줄을 지우는
+    # 것은 출처를 남기는 것보다 훨씬 나쁘다.**
+    #
+    # 그래서 두 조건을 모두 만족할 때만 버린다.
+    #   ① 지우고 난 자리에 숫자가 하나도 없다 (사실이 없다는 뜻)
+    #   ② 남은 말이 "어디에 적혀 있다"는 연결어뿐이다
+    keep, dropped = [], 0
+    parts_a, parts_b = _SENT_SPLIT.split(answer), _SENT_SPLIT.split(stripped)
+    for before, after in zip(parts_a, parts_b):
+        had_cite = len(before) - len(after) > 3
+        body = "".join(_CONTENT.findall(after))
+        if (had_cite and not any(c.isdigit() for c in after)
+                and len(body) < 60 and _BOILERPLATE.search(after)):
+            dropped += 1
+            continue
+        keep.append(after)
+    if dropped and len(parts_a) == len(parts_b):
+        stripped = "\n".join(s for s in keep if s.strip())
+
+    for pat, rep in ((re.compile(r"\(\s*\)"), ""),
+                     (re.compile(r"[ \t]{2,}"), " "),
+                     (re.compile(r"\s+([,.)])"), r"\1"),
+                     (re.compile(r"(?:,\s*)+([,.])"), r"\1"),
+                     (re.compile(r"^[\s\-·]*[:：]\s*", re.M), ""),
+                     (re.compile(r"(\d+\.)\s*[:：]\s*"), r"\1 "),
+                     (re.compile(r"\n{3,}"), "\n\n")):
+        stripped = pat.sub(rep, stripped)
+    stripped = "\n".join(l.rstrip() for l in stripped.split("\n")).strip()
+    return stripped, n
+
+
 def _dedupe_citations(answer: str) -> tuple[str, int]:
     """붙어 있는 출처 표기에서 같은 것이 반복되면 하나만 남긴다."""
     if not answer:
@@ -2209,6 +2328,29 @@ def to_response(state: dict) -> dict:
         state["answer"] = deduped
         state.setdefault("trace", []).append(
             f"출처 정리: 중복된 출처 표기 {n_dup}개 제거")
+
+    # 마지막으로 본문에서 출처 표시를 전부 걷어낸다.
+    # ANSWER_CITATIONS=1 로 두면 남긴다 — 수정 전후를 비교할 때만 쓴다.
+    if os.environ.get("ANSWER_CITATIONS", "").strip() != "1":
+        stripped, n_cite = _strip_citations(state.get("answer") or "")
+        if n_cite:
+            state["answer"] = stripped
+            state.setdefault("trace", []).append(
+                f"출처 정리: 본문 출처 표기 {n_cite}개 제거 "
+                f"(출처는 retrieved_context와 아래 목록에 있음)")
+
+    # 관리자용 출처 목록은 think_trace에 남긴다. 사용자 답변에는 안 들어가고,
+    # 채점기가 보는 retrieved_context에도 이미 같은 정보가 들어 있다.
+    _ev = state.get("evidence") or []
+    if _ev:
+        seen, labels = set(), []
+        for e in _ev:
+            who = e.get("fund_name") or e.get("doc_id") or "공통"
+            lab = f"{who} {e['page']}쪽" if e.get("page") else who
+            if lab not in seen:
+                seen.add(lab)
+                labels.append(lab)
+        state.setdefault("trace", []).append("출처: " + " / ".join(labels))
 
     # 계산 결과가 있으면 가장 앞에 넣는다 (평가에서 이 필드가 채점 대상)
     calc_text = state.get("calc_result")
