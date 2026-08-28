@@ -1384,7 +1384,12 @@ def fee_sql(state: dict) -> dict:
             if not rows:
                 relaxed = _relax_fund_name(sql_plain)
                 if relaxed:
-                    relaxed = _normalize_class_sql(relaxed)
+                    # 본경로와 **같은 정규화를 전부** 태워야 한다. 예전에는
+                    # 클래스만 걸어서, 펀드명 완화가 필요하면서 판매경로
+                    # 조건도 있는 질문이 조용히 엉뚱한 행을 잡았다.
+                    # 실측(killing camp H-08): channel='온라인'을 그대로 두면
+                    # '온라인슈퍼'인 S-P2(0.15%)를 놓치고 Ae(0.195%)만 잡는다.
+                    relaxed = _normalize_channel_sql(_normalize_class_sql(relaxed))
                     try:
                         conn = sqlite3.connect(FUND_FEES_DB)
                         conn.row_factory = sqlite3.Row
