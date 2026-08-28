@@ -145,6 +145,37 @@ BODY_PROFILES = [
 
 _BODY_PROFILE: str | None = os.environ.get("CLOVA_CHAT_PROFILE") or None
 
+# ── 토큰 사용량 집계 ──────────────────────────────────────────────
+# HCX 응답의 result.usage에 promptTokens/completionTokens가 들어온다.
+# 여태 버리고 있었는데, 이걸 쌓아두면 "평가셋 한 번에 얼마나 쓰는가"를
+# 콘솔을 보지 않고도 정확히 알 수 있다. TPM 한도는 입력 토큰 + 예약분으로
+# 계산되므로 입력/출력을 나눠서 봐야 어디를 줄일지 판단할 수 있다.
+_USAGE = {"calls": 0, "prompt": 0, "completion": 0, "total": 0}
+_LAST_USAGE: dict = {}
+
+
+def token_usage() -> dict:
+    """프로세스 시작 이후 누적 토큰 사용량."""
+    return dict(_USAGE)
+
+
+def reset_token_usage() -> None:
+    for k in _USAGE:
+        _USAGE[k] = 0
+
+
+def _record_usage(js: dict) -> None:
+    global _LAST_USAGE
+    u = (js.get("result") or {}).get("usage") or {}
+    p = int(u.get("promptTokens") or 0)
+    c = int(u.get("completionTokens") or 0)
+    t = int(u.get("totalTokens") or (p + c))
+    _LAST_USAGE = {"prompt": p, "completion": c, "total": t}
+    _USAGE["calls"] += 1
+    _USAGE["prompt"] += p
+    _USAGE["completion"] += c
+    _USAGE["total"] += t
+
 
 def _chat_config() -> tuple[str, str, str]:
     key = os.environ.get("CLOVA_API_KEY", "").strip().strip('"').strip("'")
@@ -198,6 +229,7 @@ def call_hcx(messages: list[dict], max_tokens: int = 1200,
                 if verbose:
                     print(f"    ✅ '{name}' 조합으로 고정합니다.")
             js = r.json()
+            _record_usage(js)
             return js if raw else parse_hcx(js)
         last = f"HTTP {r.status_code}: {r.text[:250]}"
         # 파라미터 문제가 아니면(인증·한도 등) 다른 조합을 시도해도 소용없다
@@ -288,6 +320,23 @@ PROD_HINTS = [
 ]
 FUND_CODE_RE = re.compile(r"\bKR\d{10}[A-Z0-9]?\b", re.I)
 
+# ── 세법 조문이 투자설명서에만 있는 사각지대 ─────────────────────────
+# 실측 근거(H-20, 2026-08-27): "저율과세를 받으려면 요양 기간이 몇 개월?"
+# 정답은 '3개월'인데, route가 제도 키워드 4개만 보고 doc_type=연금문서로
+# 좁혀 후보에서 통째로 뺐다. '3개월 이상의 요양'이라는 소득세법 문구는
+# 연금문서(305청크)에 없고 **투자설명서의 세제 부록**에만 있다(100청크).
+#
+# 즉 "제도 질문 = 연금문서"라는 전제가 세법 조문에서는 깨진다.
+# 이런 질문은 제도 6 + 투자설명서 2로 나눠 검색한다. 상품 쪽에 2자리만
+# 주므로 헛발이어도 손실이 작고, 맞으면 통째로 못 보던 문서를 본다.
+#
+# 좁게 잡았다. 96문항(홀드아웃 40 + 통합 56)에 걸어보니 실제로 세법
+# 조문을 묻는 문항만 걸린다.
+TAXLAW_HINTS = [
+    "저율과세", "부득이한 사유", "부득이한사유",
+    "기타소득세", "과세이연", "해지가산세", "소득세법",
+]
+
 # ── SQL 라우팅 신호 ─────────────────────────────────────────────────
 # 벡터 검색으로 못 푸는 수치 비교·정렬·집계 질문을 감지한다.
 # "총보수 0.5% 이하 펀드 목록" → need_sql=True
@@ -364,7 +413,20 @@ def _needs_sql(question: str) -> bool:
     has_compare = any(c in low for c in SQL_COMPARE)
     has_sort = any(s in low for s in SQL_SORT)
     has_agg = any(a in low for a in SQL_AGG)
-    return has_compare or has_sort or has_agg or has_class
+
+    # 클래스를 **이름으로 부르지 않고 속성으로만** 지목하는 질문도 켠다.
+    #
+    # 실측 근거(killing camp H-08, 2026-08-27): "NH-Amundi하나로단기채를
+    # 퇴직연금 계좌로 온라인 가입하면 총보수가 몇 %인가요?"에서 SQL이 아예
+    # 안 켜졌다. 위의 has_class가 '클래스'라는 낱말이나 코드(C-P 등)를
+    # 요구하는데 이 질문에는 둘 다 없기 때문이다. 그런데 정답(S-P2 0.15%)은
+    # DB에 멀쩡히 있었고, 검색으로만 답하려다 엉뚱한 펀드 보수를 나열했다.
+    #
+    # 사용자는 보통 클래스 코드를 모른다. "퇴직연금 계좌로 온라인 가입"이
+    # 훨씬 자연스러운 표현이고, 그것만으로도 DB에서 행을 특정할 수 있다.
+    has_class_attr = any(a in low for a in SQL_CLASS_ATTR)
+
+    return has_compare or has_sort or has_agg or has_class or has_class_attr
 
 
 # ── 계산 라우팅 신호 ─────────────────────────────────────────────────
@@ -424,19 +486,43 @@ def _looks_like_injection(text: str) -> bool:
     return any(m.lower() in low for m in _INJECTION_MARKERS)
 
 
+# ── 거절 문구 ────────────────────────────────────────────────────────
+# 2026-08-27 개정. 이전 문구는 "답변드릴 수 없습니다"로 끊고 끝났다.
+# 차단 자체는 정확했지만 상담으로서는 반쪽이다. 왜 못 하는지와
+# **다음에 무엇을 해야 하는지**가 빠져 있으면 사용자는 갈 곳이 없다.
+#
+# 거절 사유를 구분해서 말한다.
+#   · 개인 계좌 조회·변경 → 권한의 문제다. "자료에 없다"가 아니다.
+#   · 법령 우회 요청      → 대신 합법적인 대안을 제시할 수 있다.
+# 개인정보는 어떤 경우에도 답변에 다시 옮기지 않는다.
+
+_REFUSE_PII = (
+    "죄송합니다. 주민등록번호·카드번호 같은 민감정보가 포함되어 있어 그대로 "
+    "처리할 수 없습니다. 개인 계좌를 조회하거나 자동이체를 설정·변경하는 "
+    "업무는 본인확인이 필요해 이 상담 채널에서는 조회할 수 없습니다.\n"
+    "미래에셋증권 앱 또는 영업점에서 본인인증을 거친 정식 절차로 신청해 "
+    "주세요.\n"
+    "제도나 상품에 대한 질문이라면 개인정보 없이 다시 물어봐 주시면 "
+    "바로 도와드리겠습니다."
+)
+
+_REFUSE_INJECTION = (
+    "죄송합니다. 내부 지침이나 시스템 설정은 공개할 수 없고, 세법·규제를 "
+    "우회하는 방법도 도와드릴 수 없습니다.\n"
+    "다만 합법적인 절세 방법은 안내해 드릴 수 있습니다. 연금계좌 세액공제"
+    "(연 최대 900만원), 퇴직소득세 과세이연, 연금수령 시 저율과세(3.3~5.5%) "
+    "같은 제도가 있으니 이 부분을 질문해 주세요."
+)
+
+
 def safety_check(state: dict) -> dict:
     q = state["question"]
     if _looks_like_pii(q):
-        state["answer"] = (
-            "죄송합니다. 주민등록번호·카드번호로 보이는 개인정보가 포함되어 있어 "
-            "답변드릴 수 없습니다. 개인정보를 빼고 제도나 상품에 대한 질문으로 "
-            "다시 문의해 주세요.")
+        state["answer"] = _REFUSE_PII
         state["trace"].append("safety_check: 개인정보 패턴 감지 → 표준 거절 응답, 이후 단계 건너뜀")
         state["_blocked"] = True
     elif _looks_like_injection(q):
-        state["answer"] = (
-            "죄송합니다. 해당 요청에는 답변드릴 수 없습니다. 연금 제도나 상품에 "
-            "대해 궁금한 점을 질문해 주세요.")
+        state["answer"] = _REFUSE_INJECTION
         state["trace"].append("safety_check: 프롬프트 조작 시도 패턴 감지 → 표준 거절 응답, 이후 단계 건너뜀")
         state["_blocked"] = True
     return state
@@ -473,15 +559,28 @@ def route(state: dict) -> dict:
     # → 한쪽이 독식하지 못하게 제도·상품을 나눠 검색하고 합친다.
     hybrid = inst >= 1 and prod >= 1 and doc_type is None
 
+    # 세법 조문 질문이면 연금문서로 좁힌 것을 풀고 투자설명서 세제 부록을
+    # 2자리 확보해 준다. (TAXLAW_HINTS 위의 설명 참조)
+    tax_mix = bool(doc_type == "연금문서"
+                   and any(h in low for h in TAXLAW_HINTS))
+    if tax_mix:
+        doc_type = None
+        hybrid = True
+
     m = FUND_CODE_RE.search(q)
     state["route"] = {
         "doc_type": doc_type,
         "hybrid": hybrid,
+        "tax_mix": tax_mix,
+        # 분할 검색에서 어느 쪽에 자리를 더 줄지 정하는 데 쓴다
+        "inst": inst,
+        "prod": prod,
         "fund_code": m.group(0).upper() if m else None,
         "need_sql": need_sql,
         "need_calc": need_calc,
         "reason": f"제도 키워드 {inst}개 / 상품 키워드 {prod}개"
-                  + (", 복합" if hybrid else "")
+                  + (", 세법조문(투자설명서 세제부록 포함)" if tax_mix else "")
+                  + (", 복합" if hybrid and not tax_mix else "")
                   + (", SQL 필요" if need_sql else "")
                   + (", 계산 필요" if need_calc else ""),
     }
@@ -551,6 +650,55 @@ class Retriever:
             core = _fund_core(name).replace("미래에셋", "")
             if len(core) >= 2:
                 self.fund_core_index.setdefault(core, []).append((fc, name))
+
+    # ── 짧은 이웃 청크 보강 ────────────────────────────────────────
+    NEIGHBOR_MAX_CHARS = 300   # 이보다 짧은 청크만 덤으로 붙인다
+    NEIGHBOR_MAX_ADD = 3       # 한 질문에 최대 3개
+
+    def _add_short_neighbors(self, hits: list, state: dict) -> list:
+        """검색된 청크의 바로 앞뒤 청크가 아주 짧으면 덤으로 붙인다.
+
+        실측 근거(H-18, 2026-08-27): "IRP 부담금 입금 취소는 언제까지?"의
+        정답은 doc6_p1_0001(section '5. 입금취소', **본문 100자**)인데
+        상위 8개에 못 들었다. 그런데 같은 문서의 형제 청크 0000·0002·0003·
+        0007은 **넷 다** 들어왔다. 사이에 낀 0001만 빠진 것이다.
+
+        원인은 길이다. 100자짜리는 벡터도 BM25도 구조적으로 불리하다.
+        임베딩은 짧은 글에서 주제가 흐려지고, BM25는 매칭될 토큰 자체가
+        적다. 내용이 나빠서가 아니라 짧아서 밀린다.
+
+        그래서 순위를 건드리지 않는다. 상위 8개는 그대로 두고, 그 이웃 중
+        짧은 것만 덤으로 붙인다. 자리를 뺏지 않으니 기존 문항이 깨질 일이
+        없고, 300자 × 3개면 문맥 비용도 900자뿐이다(현재 문항당 입력
+        6,136토큰, 상한 9,000자라 여유가 있다).
+        """
+        have = {c for c, _ in hits}
+        extra = []
+        for cid, _ in hits:
+            if len(extra) >= self.NEIGHBOR_MAX_ADD:
+                break
+            m = re.match(r"^(.*)_(\d+)$", cid)
+            if not m:
+                continue
+            prefix, width = m.group(1), len(m.group(2))
+            idx = int(m.group(2))
+            for nb in (idx - 1, idx + 1):
+                if nb < 0 or len(extra) >= self.NEIGHBOR_MAX_ADD:
+                    continue
+                ncid = f"{prefix}_{nb:0{width}d}"
+                if ncid in have:
+                    continue
+                text = self.text_of.get(ncid)
+                if text is None or len(text) > self.NEIGHBOR_MAX_CHARS:
+                    continue
+                have.add(ncid)
+                extra.append((ncid, {"neighbor": 1}))
+
+        if extra:
+            state["trace"].append(
+                "retrieve: 짧아서 밀린 이웃 청크 보강 → "
+                + ", ".join(c for c, _ in extra))
+        return list(hits) + extra
 
     def _detect_compare_funds(self, question: str):
         """질문에 같은 계열(뿌리)의 펀드가 2개 이상 언급됐는지 찾는다.
@@ -682,7 +830,24 @@ class Retriever:
             #
             # SQL을 쓰는 질문이면 상품 쪽 수치는 DB가 주므로 투자설명서 청크가
             # 덜 중요하다. 그만큼 제도 쪽에 자리를 더 준다.
-            if r.get("need_sql"):
+            #
+            # 세법 조문 질문(tax_mix)도 같다. 제도 문서가 본체이고
+            # 투자설명서 세제 부록은 조문 원문을 확인하는 보조라 2자리면 된다.
+            #
+            # ── 2026-08-27 추가: 자리 배분을 신호 세기로 정한다 ──────────
+            # 실측 문제: 펀드 73종 중 10종의 **이름 자체에 제도 단어가 들어
+            # 있다**(퇴직연금 6, 연금저축 2, DB자산운용 2). 그래서
+            # "미래에셋고배당포커스연금저축의 C-e 총보수는?" 같은 순수 펀드
+            # 질문이 제도 키워드 1개로 세어져 복합으로 분류되고, need_sql이
+            # 켜져 있으니 8칸 중 6칸을 관련 없는 연금문서에 내줬다.
+            # 공식 v4 벤치마크 30문항 중 8문항이 이 경우였고, 그중 6문항은
+            # 상품 신호가 제도 신호보다 강했다.
+            #
+            # → 어느 쪽 신호가 센지를 먼저 보고, 센 쪽에 자리를 더 준다.
+            #   need_sql 규칙은 신호가 팽팽할 때만 적용한다.
+            if r.get("prod", 0) > r.get("inst", 0):
+                inst_n, prod_n = 2, TOP_K - 2
+            elif r.get("need_sql") or r.get("tax_mix"):
                 inst_n, prod_n = TOP_K - 2, 2
             else:
                 inst_n = prod_n = max(2, TOP_K // 2)
@@ -704,11 +869,15 @@ class Retriever:
                     if len(merged) >= TOP_K:
                         break
             if inst_hits and prod_hits:
+                why = ""
+                if r.get("prod", 0) > r.get("inst", 0):
+                    why = (f" (상품 신호 {r['prod']} > 제도 {r['inst']} "
+                           f"→ 상품 비중↑)")
+                elif r.get("need_sql"):
+                    why = " (SQL이 수치를 주므로 제도 비중↑)"
                 state["trace"].append(
                     f"retrieve: 복합 질문 → 제도 {len(inst_hits)}개 + "
-                    f"상품 {len(prod_hits)}개로 나눠 검색"
-                    + (" (SQL이 수치를 주므로 제도 비중↑)"
-                       if r.get("need_sql") else ""))
+                    f"상품 {len(prod_hits)}개로 나눠 검색" + why)
                 fused = merged
 
         # 필터를 걸었는데 결과가 빈약하면 필터 없이 다시 (잘못 좁힌 경우 대비)
@@ -717,8 +886,10 @@ class Retriever:
             state["route"] = {**r, "doc_type": None, "fund_code": None}
             return self(state)   # doc_type·fund가 None이 되므로 재귀는 1회로 끝난다
 
+        picked = self._add_short_neighbors(fused[:TOP_K], state)
+
         ev = []
-        for cid, src in fused[:TOP_K]:
+        for cid, src in picked:
             m = self.md_of[cid]
             ev.append({
                 "chunk_id": cid,
@@ -790,7 +961,9 @@ CREATE TABLE fund_fees (
       C-Pe, C-Pe1, C-Pe2, C-R, C-RP, C-RPe, C-Re, C-W, C-e, C-g, C-i,
       C1, C2, C3, C4, CG, Ce, Cf, Cf-RP, Ci-RP, Cw,
       J-Pe, J-RPe, J-e, R, R-A, S, S-P, S-P2, S-RP, Sp
-      ※ 대소문자를 구분합니다. 'A-e'와 'A-E'는 다른 클래스입니다.
+      ※ 표기가 펀드마다 흔들립니다('Ae' / 'A-e' / 'A-E'가 모두 존재).
+        하이픈·대소문자는 조회할 때 자동으로 흡수되므로, 사용자가 말한
+        표기를 그대로 쓰면 됩니다. 어느 쪽인지 고민하지 마십시오.
   account_type: '연금저축'(48행), '퇴직연금'(53행), NULL(262행 — 연금 전용이 아닌 일반 클래스)
       ※ 빈 문자열('')이 아니라 NULL입니다. account_type = '' 는 항상 0행입니다.
   channel: '오프라인'(203행), '온라인'(121행), '온라인슈퍼'(14행), NULL(25행)
@@ -837,6 +1010,41 @@ CREATE TABLE fund_fees (
     두 값을 모두 물으면 둘 다 SELECT 하십시오.
   · 환매수수료·선취수수료 조건을 물으면 front_load_text도 SELECT 하십시오.
 
+■ 절대 규칙 두 가지 — 실제로 오답을 만든 사례입니다  ★★
+
+  ① OR를 쓰면 **그 OR 묶음 전체를 괄호로 감싸십시오.**
+     SQL은 AND를 OR보다 먼저 묶습니다. 괄호를 빠뜨리면 조건이
+     엉뚱하게 걸리는데, 에러가 안 나서 알아채지 못합니다.
+
+        틀림 ← 실제로 오답을 만든 쿼리
+          WHERE fund_name LIKE '%고배당포커스연금저축%'
+             OR fund_name LIKE '%코어밸류연금저축%'
+            AND class_code = 'C' AND channel = '오프라인'
+          해석: 고배당포커스는 **클래스 조건 없이 전부** 걸린다.
+                (코어밸류에만 C·오프라인이 적용된다)
+
+        올바름
+          WHERE (fund_name LIKE '%고배당포커스연금저축%'
+              OR fund_name LIKE '%코어밸류연금저축%')
+            AND class_code = 'C' AND channel = '오프라인'
+
+  ② 비교 질문에는 **MIN/MAX/COUNT를 쓰지 마십시오.** 개별 행을 그대로
+     가져오십시오. 집계는 어느 클래스가 어느 값인지를 지워버립니다.
+
+        틀림 ← 실제로 오답을 만든 쿼리
+          SELECT MIN(fee_distribution), MAX(fee_distribution), COUNT(*)
+          FROM fund_fees WHERE ... AND class_code IN ('A','A-e')
+          해석: 0.1과 0.2가 나오지만 **어느 쪽이 A인지 알 수 없다.**
+
+        올바름
+          SELECT fund_name, class_code, fee_distribution, page
+          FROM fund_fees WHERE ... AND class_code IN ('A','A-e')
+          ORDER BY fee_distribution
+
+     "어느 쪽이 더 싼가", "각각 얼마인가", "비교해 달라" 는 전부
+     개별 행이 필요한 질문입니다. 집계는 "평균", "몇 개" 를 물을 때만
+     쓰십시오.
+
 ■ 규칙:
   1. SELECT 문 하나만 출력하십시오 (설명·주석 없이 SQL만)
   2. ORDER BY로 정렬하십시오 (비교·순위 질문일 때)
@@ -853,13 +1061,21 @@ CREATE TABLE fund_fees (
 
 _DANGEROUS_KW = re.compile(
     r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|ATTACH|DETACH|PRAGMA|VACUUM"
-    r"|REPLACE|MERGE|TRUNCATE|GRANT|REVOKE|EXEC)\b",
+    # REPLACE는 두 얼굴이다. 'REPLACE INTO'는 삽입문이라 막아야 하지만
+    # REPLACE(문자열,찾을것,바꿀것)은 그냥 함수다. 뒤에 '('가 오면 함수이므로
+    # 통과시킨다. 이걸 구분하지 않아 class_code 정규화가 통째로 막혔던 적이 있다
+    # (B4-7F3B00: 0행 → 완화 재조회가 ValueError로 죽음).
+    r"|REPLACE(?!\s*\()"
+    r"|MERGE|TRUNCATE|GRANT|REVOKE|EXEC)\b",
     re.IGNORECASE,
 )
 
 
 _FUND_EQ_RE = re.compile(r"fund_name\s*=\s*'([^']*)'", re.I)
 _FUND_IN_RE = re.compile(r"fund_name\s+IN\s*\(([^)]*)\)", re.I)
+_FUND_LIKE_RE = re.compile(r"fund_name\s+LIKE\s*'([^']*)'", re.I)
+# 컬럼 쪽 공백을 지우고 비교한다. 아래 _fund_like 설명 참조.
+_FUND_EXPR = "REPLACE(fund_name,' ','')"
 
 
 def _fund_like(literal: str) -> str:
@@ -868,20 +1084,40 @@ def _fund_like(literal: str) -> str:
     '미래에셋프리미엄크레딧알파 A-e' 처럼 클래스 코드가 뒤에 붙어 있으면
     떼어낸다. 클래스는 class_code로 걸러야 하고, 못 걸러도 몇 행 더 나오는
     편이 0행보다 낫다.
+
+    공백은 '%'로 바꾼다. 사용자가 부르는 이름과 정식 명칭 사이에는 보통
+    단어가 더 끼어 있기 때문이다(아래 _spread 설명 참조).
     """
     s = literal.strip()
     parts = s.split()
     if len(parts) > 1 and _CLASS_CODE_RE.fullmatch(parts[-1]):
         s = " ".join(parts[:-1])
-    return f"fund_name LIKE '%{s.strip()}%'"
+    return f"{_FUND_EXPR} LIKE '%{_spread(s)}%'"
+
+
+def _spread(s: str) -> str:
+    """리터럴 안의 공백을 '%'로 바꾼다.
+
+    실측 근거(H-37, 2026-08-27): "미래에셋솔로몬 국공채 시리즈 4개"를 물었더니
+    HCX가 `fund_name LIKE '%미래에셋솔로몬 국공채%'`를 만들었는데 실제 이름은
+    '미래에셋솔로몬**단기**국공채증권자투자신탁1호(채권)'이라 0행이 됐다.
+    사용자가 부르는 이름은 정식 명칭에서 중간 토막을 빼고 부르는 형태라,
+    공백을 '%'로 바꾸면 그 자리에 무엇이 끼어 있어도 걸린다.
+    확인: 이 치환만으로 4개 펀드(0.46/0.41/0.42/0.38)가 그대로 나온다.
+    """
+    return "%".join(p for p in s.split() if p)
 
 
 def _relax_fund_name(sql: str) -> str | None:
-    """fund_name의 완전일치(= / IN)를 LIKE로 바꾼다. 바꿀 게 없으면 None.
+    """fund_name 조건을 느슨하게 바꾼다. 바꿀 게 없으면 None.
 
-    실측 근거: 56문항 실행에서 fee_sql이 0행을 낸 6건이 **전부** 이 패턴이었다.
-    DB의 fund_name은 '…증권자투자신탁(채권)' 같은 정식 명칭이라
-    사용자가 부르는 짧은 이름과 완전일치할 수가 없다.
+    ① 완전일치(= / IN) → LIKE
+       실측 근거: 56문항 실행에서 fee_sql이 0행을 낸 6건이 **전부** 이 패턴이었다.
+       DB의 fund_name은 '…증권자투자신탁(채권)' 같은 정식 명칭이라
+       사용자가 부르는 짧은 이름과 완전일치할 수가 없다.
+
+    ② 이미 LIKE인 경우 → 패턴 안의 공백을 '%'로
+       실측 근거: H-37. LIKE인데도 0행이면 공백 자리에 단어가 더 있는 것이다.
     """
     out, changed = sql, False
 
@@ -901,6 +1137,23 @@ def _relax_fund_name(sql: str) -> str | None:
         return _fund_like(m.group(1))
 
     out = _FUND_EQ_RE.sub(_eq_sub, out)
+
+    # ② =/IN이 하나도 없었다면 이미 LIKE다.
+    #    패턴의 공백은 '%'로 벌리고, 컬럼 쪽 공백은 지운다.
+    #
+    #    실측 근거(killing camp H-08, 2026-08-27): 띄어쓰기가 **양방향으로**
+    #    어긋난다. 질문은 "NH-Amundi하나로단기채"(붙여씀)인데 DB는
+    #    "NH-Amundi 하나로 단기채 증권투자신탁[채권]"(띄어씀)이라 0행이 됐다.
+    #    _spread()는 패턴에 공백이 있을 때만 손대므로 이 방향을 못 고친다.
+    #    컬럼의 공백을 지우면 두 방향이 한 번에 풀린다(실측 0행 → 9행).
+    if not changed:
+        def _like_sub(m):
+            nonlocal changed
+            changed = True
+            return f"{_FUND_EXPR} LIKE '{_spread(m.group(1))}'"
+
+        out = _FUND_LIKE_RE.sub(_like_sub, out)
+
     return out if changed else None
 
 
@@ -923,6 +1176,93 @@ def _extract_sql(text: str) -> str:
 
     # ③ 그대로 반환 (validation에서 걸러짐)
     return text
+
+
+_CLASS_EQ_RE = re.compile(r"class_code\s*=\s*'([^']*)'", re.I)
+_CLASS_IN_RE = re.compile(r"class_code\s+IN\s*\(([^)]*)\)", re.I)
+# SQLite에서 하이픈·대소문자를 지운 형태로 비교한다
+_CLASS_EXPR = "UPPER(REPLACE(class_code,'-',''))"
+
+
+def _norm_class(s: str) -> str:
+    return s.strip().upper().replace("-", "").replace(" ", "")
+
+
+def _normalize_class_sql(sql: str) -> str:
+    """class_code 비교를 표기 흔들림에 강하게 바꾼다.
+
+    실측 근거(공식 v4, 2026-08-27): DB의 class_code 표기가 펀드마다 다르다.
+    삼성코리아중기채권은 'Ae'·'Ce'(하이픈 없음), 미래에셋고배당포커스연금저축은
+    'C-e', 하나파워e단기채는 'A-E'·'C-E'다. 세 표기가 **한 테이블에 공존**한다.
+    그래서 HCX가 질문의 "온라인 Ae"를 보고 IN ('A','A-e')를 만들면 실제 값
+    'Ae'와 안 맞아 조용히 1행만 나오고, 모델은 "확인되지 않습니다"라고 답한다
+    (B4-E0357A). 판매보수를 못 찾아 투자설명서의 투자비용 예시 금액을
+    보수인 것처럼 주워온 사례도 있다(B4-7A46D7).
+
+    하이픈과 대소문자를 지워서 비교하면 세 표기가 하나로 모인다.
+    **같은 펀드 안에서 정규화가 충돌하는 경우는 0건**임을 330행 전수로
+    확인했으므로, 서로 다른 클래스를 잘못 합칠 위험은 없다.
+    쿼리는 항상 fund_name으로 좁혀지므로 펀드 간 표기 겹침도 문제되지 않는다.
+    """
+    def _eq(m):
+        return f"{_CLASS_EXPR} = '{_norm_class(m.group(1))}'"
+
+    def _in(m):
+        lits = re.findall(r"'([^']*)'", m.group(1))
+        if not lits:
+            return m.group(0)
+        vals = ", ".join(f"'{_norm_class(v)}'" for v in lits)
+        return f"{_CLASS_EXPR} IN ({vals})"
+
+    out = _CLASS_IN_RE.sub(_in, sql)
+    out = _CLASS_EQ_RE.sub(_eq, out)
+    return out
+
+
+_CHANNEL_EQ_RE = re.compile(r"channel\s*=\s*'([^']*)'", re.I)
+_CHANNEL_IN_RE = re.compile(r"channel\s+IN\s*\(([^)]*)\)", re.I)
+
+
+def _channel_cond(literal: str) -> str | None:
+    """판매경로 리터럴 하나를 DB의 실제 값에 맞는 조건으로 바꾼다.
+
+    실측 근거(killing camp H-11, 2026-08-27): HCX가
+    `channel IN ('오프라인', '온라인직접판매')`를 만들었는데 DB의 channel은
+    '온라인' / '오프라인' / '온라인슈퍼' 셋뿐이다. '온라인직접판매'는 존재하지
+    않는 값이라 J-Pe(0.227%)를 못 찾고 "확인되지 않습니다"로 답했다.
+    질문에 쓰인 표현을 그대로 리터럴로 옮긴 것이 원인이다.
+
+    온라인 계열을 LIKE '온라인%'로 넓히는 이유: H-08에서 사용자가 말한
+    "온라인 가입"의 정답 클래스(S-P2)는 channel이 '온라인슈퍼'였다.
+    일반 사용자는 '온라인'과 '온라인슈퍼'를 구분해 말하지 않는다.
+    """
+    s = literal.strip()
+    if any(k in s for k in ("오프라인", "창구", "영업점", "지점")):
+        return "channel = '오프라인'"
+    if any(k in s for k in ("온라인", "직판", "다이렉트", "슈퍼", "인터넷", "비대면")):
+        return "channel LIKE '온라인%'"
+    return None          # 모르는 값이면 손대지 않는다
+
+
+def _normalize_channel_sql(sql: str) -> str:
+    """channel 비교를 DB에 실제로 있는 값으로 맞춘다."""
+    def _eq(m):
+        return _channel_cond(m.group(1)) or m.group(0)
+
+    def _in(m):
+        lits = re.findall(r"'([^']*)'", m.group(1))
+        conds, seen = [], set()
+        for v in lits:
+            c = _channel_cond(v)
+            if c is None:
+                return m.group(0)      # 하나라도 못 알아보면 통째로 둔다
+            if c not in seen:
+                seen.add(c)
+                conds.append(c)
+        return "(" + " OR ".join(conds) + ")" if len(conds) > 1 else conds[0]
+
+    out = _CHANNEL_IN_RE.sub(_in, sql)
+    return _CHANNEL_EQ_RE.sub(_eq, out)
 
 
 def _validate_sql(sql: str) -> str:
@@ -977,6 +1317,19 @@ def fee_sql(state: dict) -> dict:
             t0 = time.monotonic()
             raw_sql = call_hcx(messages, max_tokens=500, temperature=0.0)
             sql = _validate_sql(_extract_sql(raw_sql))
+            # 완화 재조회는 정규화 이전 SQL을 손봐야 한다. 정규화된 문장을
+            # 다시 정규식으로 고치면 표현이 겹쳐 꼬인다.
+            sql_plain = sql
+            # 클래스 코드 표기 흔들림은 항상 흡수한다 (위 설명 참조)
+            norm = _normalize_class_sql(sql)
+            if norm != sql:
+                state["trace"].append("fee_sql: class_code 표기를 정규화해 조회")
+                sql = norm
+            # 판매경로도 DB에 실제로 있는 값으로 맞춘다
+            ch = _normalize_channel_sql(sql)
+            if ch != sql:
+                state["trace"].append("fee_sql: channel 값을 DB 실제 값으로 정규화")
+                sql = ch
 
             conn = sqlite3.connect(FUND_FEES_DB)
             conn.row_factory = sqlite3.Row
@@ -1004,8 +1357,9 @@ def fee_sql(state: dict) -> dict:
             # 0행이면 펀드명 완전일치 때문일 공산이 크다. LIKE로 바꿔 한 번 더.
             # LLM을 다시 부르지 않으므로 비용도 지연도 거의 없다.
             if not rows:
-                relaxed = _relax_fund_name(sql)
+                relaxed = _relax_fund_name(sql_plain)
                 if relaxed:
+                    relaxed = _normalize_class_sql(relaxed)
                     try:
                         conn = sqlite3.connect(FUND_FEES_DB)
                         conn.row_factory = sqlite3.Row
@@ -1277,6 +1631,50 @@ SYSTEM_PROMPT = """당신은 미래에셋증권의 연금 상담 전문가입니
     예) 질문 "절세 효과가 어마어마하다던데" → 근거에 "30%~50% 감면"이라고만
         있으면 "감면율은 30~50%로, 전액 비과세는 아닙니다"처럼 과장을 정정
 
+**확인을 요청하는 형태의 질문은 판정을 첫 문장에 쓰십시오.**  ★
+"~니까 ~겠죠?", "~라고 보면 되나요?", "~ 맞죠?", "~하면 되는 거죠?" 는
+사용자가 **스스로 내린 결론이 맞는지 확인해 달라는 것**입니다.
+
+  ⚠ 단, **근거만으로 참·거짓이 갈리는 질문에만** 적용됩니다.
+    "저한테 유리한가요?", "저는 어느 쪽이 나은가요?" 처럼 **개인 상황에 따라
+    답이 달라지는 질문**은 판정 대상이 아닙니다. 이때는 억지로 예/아니오를
+    내지 말고 규칙 5-b·8-ⓒ대로 **"일률적으로 답할 수 없습니다"라고 먼저
+    밝힌 뒤** 무엇에 따라 갈리는지 조건을 나열하십시오.
+    질문이 예/아니오 모양이라고 해서 전부 판정할 수 있는 것은 아닙니다.
+근거로 참·거짓을 판정해 **"맞습니다" 또는 "아닙니다"로 시작**한 뒤 설명하십시오.
+수치와 관계만 나열하면, 훑어 읽는 사용자는 자기 오해를 그대로 갖고 갑니다.
+전제가 틀렸을 때는 **왜 그렇게 오해하기 쉬운지도 한 문장 덧붙이십시오.**
+
+    질문: "C-E가 수수료미징구 클래스니까 A-E보다 총보수도 더 싸겠죠?"
+    나쁨: "A-E는 0.25%, C-E는 0.26%입니다. 따라서 C-E가 더 높습니다."
+          (틀렸다는 말이 없어 오해가 남는다)
+    좋음: "아닙니다. 이 펀드에서는 A-E(0.25%)가 C-E(0.26%)보다 낮습니다.
+           수수료미징구는 선취수수료를 떼지 않는다는 뜻이지
+           총보수가 낮다는 뜻이 아닙니다."
+
+    질문: "임원들만 모아서 임원 전용 퇴직연금제도를 만들면 되는 거죠?"
+    좋음: "아닙니다. 임원만을 대상으로 하는 제도는 운영할 수 없습니다.
+           다만 임원도 퇴직연금규약에 가입대상으로 명시하면 가입할 수 있습니다."
+
+[규칙 2-c — 근거끼리 어긋나면 어느 한쪽을 틀렸다고 단정하지 않는다]  ★
+두 근거가 다른 값을 말하면, 대개 **적용 기준이 다른 것**이지 한쪽이 틀린 것이
+아닙니다. 같은 낱말이 제도마다 다른 뜻으로 쓰이는 경우가 특히 잦습니다.
+    예) '연금수령연차'(인출 한도를 정함)와 '연금실제수령연차'(세율 감면을
+        정함)는 이름이 비슷하지만 완전히 다른 값입니다.
+    예) 같은 '요양 기간'이라도 근로자퇴직급여보장법의 중도인출 사유 기준과
+        소득세법의 저율과세 인정 기준은 개월 수가 다릅니다.
+
+당신이 근거를 판정할 권한은 없습니다. 다음을 지키십시오.
+  · "이는 잘못된 정보로 보입니다", "오기인 듯합니다" 같은 말로 근거를
+    기각하지 마십시오. 실제로 이렇게 답해 정답 근거를 버린 사례가 있습니다.
+  · 대신 **두 기준을 나란히 제시**하고, 각각이 무엇을 결정하는지 밝히십시오.
+    예) "연금수령한도는 연금수령연차 11년차 기준으로 판단하고,
+         이연퇴직소득세 감면율은 연금실제수령연차 기준으로 판단합니다."
+  · 질문자의 상황이 어느 기준에 해당하는지 근거로 판별할 수 있으면
+    그 기준을 적용한 결론까지 쓰십시오.
+  · 질문에 적힌 숫자를 다른 개념에 그대로 갖다 쓰지 마십시오. 질문의
+    '연금수령연차 11년차'는 '연금실제수령연차 11년차'가 아닙니다.
+
 [규칙 3 — 구체적인 수치와 조건은 절대 요약하지 않는다]  ★가장 중요
 근거에 수치(금액, 비율, 세율, 기간 등)가 여러 개 나열되어 있거나 조건에 따라 다르게 제시된 경우, 임의로 하나만 선택하거나 뭉뚱그리지 말고 **전부 다** 적으십시오.
   (잘못된 예: "16.5% 과세" / 잘된 예: "소득에 따라 13.2% 또는 16.5% 과세")
@@ -1288,6 +1686,20 @@ SYSTEM_PROMPT = """당신은 미래에셋증권의 연금 상담 전문가입니
     · 예외·단서 ("단, ~인 경우는 제외" 같은 문구)
 요약하느라 이런 항목을 생략하면 답변이 틀린 것으로 간주됩니다.
 근거에 두 가지 경우(예: 일반 퇴직연금 vs 과학기술인연금)가 나오면 둘 다 쓰십시오.
+
+[규칙 3-b — 질문이 여러 개면 하나도 빠뜨리지 않는다]  ★
+질문에 "A와 B", "~하고 ~도", "각각", "그리고" 가 들어 있으면 물은 항목이
+둘 이상입니다. 답을 쓰기 전에 **질문을 항목으로 쪼개 세어 보고**, 답변에
+그 개수만큼 답이 들어 있는지 확인하십시오.
+
+    질문: "전환입금 **기한**과 입금 전용 **계좌번호 체계**를 알려주세요"  → 2개
+    나쁨: 기한(60일)만 답하고 끝냄
+    좋음: "기한은 60일 이내이고, 전용 계좌번호는 계좌번호 + 22입니다"
+
+근거에 답이 있는데 묻지도 않은 배경 설명으로 분량을 채우고 정작 물은 항목을
+빠뜨리는 것이 가장 흔한 실패입니다. 실제로 근거 8개 중 4개에 답이 들어 있는데도
+한 항목을 통째로 누락한 사례가 있습니다.
+한 항목이라도 근거에서 못 찾았다면 그 항목만 "확인되지 않습니다"라고 밝히십시오.
 
 [규칙 4 — 출처와 위치를 반드시 표기한다]  ★채점 항목
 근거 자료의 각 블록은 이런 첫 줄로 시작합니다.
@@ -1340,6 +1752,53 @@ SYSTEM_PROMPT = """당신은 미래에셋증권의 연금 상담 전문가입니
   · 클래스 계좌유형: 연금저축 / 퇴직연금, 판매경로: 온라인 / 오프라인
 
 분류어를 먼저 말하고, 부연 설명은 그 뒤에 붙이십시오.
+
+[규칙 7 — 계좌번호·코드 체계는 근거의 표기를 그대로 옮긴다]
+계좌번호 체계, 클래스 코드, 상품 코드처럼 **표기 자체가 정보인 것**은
+풀어 쓰지 말고 근거에 적힌 형태 그대로 옮기십시오.
+
+    근거: "개인IRP계좌번호 + 22로 입금"
+    나쁨: "계좌번호에 '22'를 추가합니다"   (붙이는 위치·형식이 흐려진다)
+    좋음: "전용 계좌번호는 '개인IRP계좌번호 + 22'입니다"
+
+풀어 쓴 설명을 덧붙이는 것은 좋지만, 원문 표기를 **먼저** 그대로 보이십시오.
+
+같은 이유로 **시각·기간·금액 구간**도 근거의 표기를 그대로 옮기십시오.
+    근거: "부담금입금취소(10억초과) : 08:00 ~ 15:00"
+    나쁨: "오전 8시부터 오후 3시까지"     (원문과 대조하기 어려워진다)
+    좋음: "08:00 ~ 15:00 (오전 8시 ~ 오후 3시)"
+
+[규칙 8 — 답할 수 없을 때는 '무엇이 없어서'인지 구분하고 갈 곳을 알려준다]  ★
+"확인되지 않습니다"로 끝내면 사용자는 갈 곳이 없습니다. 못 답하는 이유는
+세 가지로 갈리고, 각각 다르게 답해야 합니다. **이유를 혼동하지 마십시오.**
+
+  ⓐ 개인의 계좌·가입 정보를 묻는 경우
+     (예: "내가 DB인가요 DC인가요", "제 잔액이 얼마인가요")
+     → 자료가 부족한 것이 **아니라** 개인 정보를 조회할 권한이 없는 것입니다.
+       "자료에서 확인되지 않습니다"라고 답하면 **이유를 잘못 대는 것**입니다.
+       이렇게 답하십시오:
+       "개인별 가입 정보는 이 상담 채널에서 조회할 수 없습니다.
+        회사 인사팀 또는 퇴직연금사업자(금융회사) 앱·고객센터에서
+        본인인증 후 확인하실 수 있습니다."
+       그 다음, 제도 자체에 대해 답할 수 있는 부분(DB와 DC의 차이 등)은
+       이어서 설명하십시오.
+
+  ⓑ 자료의 범위 밖인 경우
+     (예: 국민연금 수익률, 타사 상품, 오늘의 기준금리, 미래의 개정 예정)
+     → 무엇이 범위 밖인지 밝히고, 어디서 확인하는지 알려주십시오.
+       "제공된 자료는 미래에셋증권의 사적연금·자사 펀드 중심이라
+        국민연금(공적연금) 수익률은 포함되어 있지 않습니다.
+        국민연금공단에서 확인하실 수 있습니다."
+       근거에 없는 수치를 추측해 채우지 마십시오(규칙 1-b).
+
+  ⓒ 사람마다 유불리가 갈리는 경우
+     (예: "세액정산 신청이 저한테 유리한가요")
+     → "일률적으로 답할 수 없습니다"라고 먼저 밝히고, **무엇에 따라 갈리는지**
+       조건을 나열한 뒤, 확인할 수 있는 방법(홈택스 계산 프로그램 등)을
+       안내하십시오. 한쪽으로 단정하지 마십시오.
+
+세 경우 모두 거절로 끝내지 말고 **다음에 무엇을 하면 되는지**를 반드시
+한 문장 이상 덧붙이십시오.
 
 [형식]
 - 핵심 답변을 먼저 쓰고, 그다음 조건·예외·근거를 설명합니다.
@@ -1434,7 +1893,17 @@ def compose(state: dict) -> dict:
         "   · SQL 결과를 인용할 때도 함께 참고한 문서의 쪽수를 답니다.\n"
         "2) 근거에서 못 찾은 항목은 '확인되지 않습니다'로 끝내십시오. "
         "기억나는 수치를 '일반적으로 ○○입니다'라며 덧붙이지 마십시오 — "
-        "제도는 자주 개정되어 그 값이 틀리면 확실한 오답이 됩니다."
+        "제도는 자주 개정되어 그 값이 틀리면 확실한 오답이 됩니다.\n"
+        "3) 질문이 물은 항목을 세어 보고 그 개수만큼 답했는지 확인하십시오. "
+        "'A와 B', '각각', '~도'가 있으면 항목이 둘 이상입니다.\n"
+        "4) 근거끼리 값이 다르면 한쪽을 '잘못된 정보'라고 기각하지 말고 "
+        "적용 기준이 다른 것으로 보고 둘 다 제시하십시오.\n"
+        "5) 못 답하는 부분이 있으면 이유를 구분하십시오. 개인 계좌·가입 정보는 "
+        "'자료에 없다'가 아니라 '조회할 수 없다'입니다. 자료 범위 밖이면 "
+        "'포함되어 있지 않다'고 밝히십시오. 어느 쪽이든 어디서 확인하면 "
+        "되는지 한 문장을 덧붙이십시오.\n"
+        "6) 시각·계좌번호 체계·코드는 근거의 표기 그대로 옮기십시오. "
+        "예) '08:00 ~ 15:00', '개인IRP계좌번호 + 22'"
     )
 
     messages = [
@@ -1570,9 +2039,55 @@ def fallback_answer(ev: list[dict]) -> str:
 MAX_CONTEXT_CHARS = 9000   # "극단적으로 길면 초과분은 평가에 반영되지 않을 수 있다"
 
 
+_EV_REF_RE = re.compile(r"\[\s*근거\s*(\d+)\s*\]")
+
+
+def _expand_evidence_refs(answer: str, ev: list[dict]) -> tuple[str, int]:
+    """답변에 남은 '[근거 3]' 표시를 실제 문서명·쪽수로 바꾼다.
+
+    프롬프트로 세 군데(규칙 4, 최종 확인 1)에서 금지했는데도 계속 나온다.
+    2026-08-27 홀드아웃에서도 H-20·H-04에서 나왔다. 모델을 더 설득하는
+    대신 코드로 바꾼다 — 결정적이고, 호출 비용이 0이며, 바꾼 결과가
+    사람이 읽을 수 있는 진짜 출처라 출처 점수에도 도움이 된다.
+
+        "[근거 3]에 따르면"  →  "(doc55 1쪽)에 따르면"
+
+    번호가 근거 개수를 벗어나면 손대지 않는다. 지어낸 출처를 만드는 것보다
+    내부 표시가 남는 편이 낫다.
+    """
+    if not ev or not answer:
+        return answer, 0
+    n = 0
+
+    def _sub(m):
+        nonlocal n
+        i = int(m.group(1))
+        if not 1 <= i <= len(ev):
+            return m.group(0)
+        e = ev[i - 1]
+        who = e.get("fund_name") or e.get("doc_id") or "공통"
+        label = who
+        if e.get("page"):
+            label += f" {e['page']}쪽"
+        elif e.get("section"):
+            label += f" · {e['section']}"
+        n += 1
+        return f"({label})"
+
+    return _EV_REF_RE.sub(_sub, answer), n
+
+
 def to_response(state: dict) -> dict:
     ctx_parts = []
     used = 0
+
+    # 모델이 규칙을 어기고 남긴 내부 번호를 실제 출처로 치환한다
+    fixed, n_ref = _expand_evidence_refs(state.get("answer") or "",
+                                         state.get("evidence") or [])
+    if n_ref:
+        state["answer"] = fixed
+        state.setdefault("trace", []).append(
+            f"출처 정리: 답변에 남은 '[근거 N]' 표시 {n_ref}개를 문서명·쪽수로 치환")
 
     # 계산 결과가 있으면 가장 앞에 넣는다 (평가에서 이 필드가 채점 대상)
     calc_text = state.get("calc_result")
@@ -1640,6 +2155,20 @@ def warmup() -> None:
     print(f"인덱스 로딩 완료 ({time.monotonic() - t0:.1f}초)", file=sys.stderr)
 
 
+def _trace_usage(state: dict, u0: dict, t0: float) -> None:
+    """이 문항이 쓴 토큰과 소요 시간을 trace에 남긴다.
+
+    raw 결과 파일에 그대로 실리므로, 실행이 끝난 뒤에도
+    token_report.py로 "평가셋 한 번에 얼마 썼는지"를 집계할 수 있다.
+    """
+    u1 = token_usage()
+    state["trace"].append(
+        f"토큰: 입력 {u1['prompt'] - u0['prompt']:,} + 출력 "
+        f"{u1['completion'] - u0['completion']:,} = "
+        f"{u1['total'] - u0['total']:,} (HCX 호출 {u1['calls'] - u0['calls']}회)")
+    state["trace"].append(f"총 소요 {time.monotonic() - t0:.1f}초")
+
+
 def run(question: str, question_id: str = "", use_cache: bool = True) -> dict:
     if use_cache and question_id and question_id in _CACHE:
         return _CACHE[question_id]
@@ -1647,13 +2176,14 @@ def run(question: str, question_id: str = "", use_cache: bool = True) -> dict:
     retriever = get_retriever()   # 로딩은 데드라인 측정 전에 끝내둔다
 
     t0 = time.monotonic()
+    u0 = token_usage()          # 이 문항이 쓴 양만 따로 재기 위한 기준점
     state = {"question": question, "question_id": question_id,
              "trace": [], "today": str(date.today()),
              "_deadline_at": t0 + DEADLINE}
 
     state = safety_check(state)
     if state.get("_blocked"):
-        state["trace"].append(f"총 소요 {time.monotonic()-t0:.1f}초")
+        _trace_usage(state, u0, t0)
         resp = to_response(state)
         if question_id:
             _CACHE[question_id] = resp
@@ -1681,7 +2211,7 @@ def run(question: str, question_id: str = "", use_cache: bool = True) -> dict:
             break
         state = node(state)
 
-    state["trace"].append(f"총 소요 {time.monotonic()-t0:.1f}초")
+    _trace_usage(state, u0, t0)
     resp = to_response(state)
     if question_id:
         _CACHE[question_id] = resp
