@@ -2123,6 +2123,39 @@ MAX_CONTEXT_CHARS = 9000   # "극단적으로 길면 초과분은 평가에 반�
 _EV_REF_RE = re.compile(r"\[\s*근거\s*(\d+)\s*\]")
 
 
+# 같은 문서·같은 쪽이 근거 목록에 여러 청크로 들어오면, 모델이
+# "[근거 2][근거 5]"처럼 쓰고 위 치환이 둘 다 같은 값으로 바꿔
+# "(doc55 1쪽)(doc55 1쪽)"가 된다. 실측(홀드아웃 v2, 2026-08-28): 24문항 중
+# 5문항에서 나왔고 한 문항은 "(doc46 1쪽), (doc46 1쪽), (doc55 1쪽),
+# (doc55 1쪽), (doc14 4쪽), (doc55 1쪽)"까지 늘어졌다.
+#
+# 붙어 있는 출처 묶음에서 중복만 걷어낸다. 서로 다른 출처는 전부 남기므로
+# 채점에 쓰이는 근거는 하나도 잃지 않는다(실측: 정리 전후 A/B/C/E 전부 동일).
+_CITE_ONE = r"\([^()\n]{1,60}?\s\d+쪽\)"
+_CITE_RUN_RE = re.compile(
+    rf"(?:{_CITE_ONE})(?:\s*(?:,|와|과|및)?\s*(?:{_CITE_ONE}))+")
+
+
+def _dedupe_citations(answer: str) -> tuple[str, int]:
+    """붙어 있는 출처 표기에서 같은 것이 반복되면 하나만 남긴다."""
+    if not answer:
+        return answer, 0
+    n = 0
+
+    def _fix(m):
+        nonlocal n
+        seen, out = set(), []
+        for c in re.findall(_CITE_ONE, m.group(0)):
+            if c not in seen:
+                seen.add(c)
+                out.append(c)
+        dropped = len(re.findall(_CITE_ONE, m.group(0))) - len(out)
+        n += dropped
+        return ", ".join(out)
+
+    return _CITE_RUN_RE.sub(_fix, answer), n
+
+
 def _expand_evidence_refs(answer: str, ev: list[dict]) -> tuple[str, int]:
     """답변에 남은 '[근거 3]' 표시를 실제 문서명·쪽수로 바꾼다.
 
@@ -2169,6 +2202,13 @@ def to_response(state: dict) -> dict:
         state["answer"] = fixed
         state.setdefault("trace", []).append(
             f"출처 정리: 답변에 남은 '[근거 N]' 표시 {n_ref}개를 문서명·쪽수로 치환")
+
+    # 치환 **뒤에** 돌려야 한다. 치환이 중복을 만들어내기 때문이다.
+    deduped, n_dup = _dedupe_citations(state.get("answer") or "")
+    if n_dup:
+        state["answer"] = deduped
+        state.setdefault("trace", []).append(
+            f"출처 정리: 중복된 출처 표기 {n_dup}개 제거")
 
     # 계산 결과가 있으면 가장 앞에 넣는다 (평가에서 이 필드가 채점 대상)
     calc_text = state.get("calc_result")
