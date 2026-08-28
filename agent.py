@@ -42,11 +42,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
 import sys
+import threading
 import time
+from collections import OrderedDict
 from datetime import date
 from itertools import zip_longest
 from pathlib import Path
@@ -58,7 +61,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # 모듈로 임포트될 때 설정이 통째로 비어버린다. 실제로 그 버그를 겪었다.
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    # 경로를 **명시한다**. 인자 없이 부르면 현재 작업 디렉터리에서 찾는데,
+    # systemd가 WorkingDirectory를 잘못 잡아도 프로세스는 조용히 뜨기 때문에
+    # 키가 통째로 빈 채로 서비스가 살아있는 상태가 된다. 파일 위치 기준이면
+    # 어디서 띄우든 같은 .env를 읽는다.
+    _ENV_PATH = Path(__file__).resolve().parent / ".env"
+    load_dotenv(_ENV_PATH if _ENV_PATH.exists() else None)
 except ImportError:
     pass
 
@@ -110,6 +118,15 @@ HCX_MIN_INTERVAL = 2.0   # 연속 호출 사이 최소 간격(초)
 HCX_BREAKER_THRESHOLD = 2
 _consecutive_timeouts = 0
 _last_call_at = 0.0
+
+# 서버(FastAPI)는 동기 엔드포인트를 **스레드풀에서 병렬로** 돌린다. 위 두
+# 전역을 요청 여러 개가 동시에 읽고 쓴다는 뜻이다. 락이 없으면 두 스레드가
+# 같은 _last_call_at을 보고 같은 만큼 쉰 뒤 **동시에** 호출을 날려서, 간격
+# 제한이 있으나 마나가 된다(빈도 제한을 그대로 때린다).
+# 간격 계산 → 대기 → 시각 기록을 한 덩어리로 묶어야 실제로 벌어진다.
+_HCX_LOCK = threading.Lock()
+_USAGE_LOCK = threading.Lock()
+_CACHE_LOCK = threading.Lock()
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -171,10 +188,11 @@ def _record_usage(js: dict) -> None:
     c = int(u.get("completionTokens") or 0)
     t = int(u.get("totalTokens") or (p + c))
     _LAST_USAGE = {"prompt": p, "completion": c, "total": t}
-    _USAGE["calls"] += 1
-    _USAGE["prompt"] += p
-    _USAGE["completion"] += c
-    _USAGE["total"] += t
+    with _USAGE_LOCK:
+        _USAGE["calls"] += 1
+        _USAGE["prompt"] += p
+        _USAGE["completion"] += c
+        _USAGE["total"] += t
 
 
 def _chat_config() -> tuple[str, str, str]:
@@ -375,7 +393,8 @@ SQL_FIELD = ["총보수", "수수료", "보수", "판매보수", "판매수수�
 SQL_CLASS_ATTR = ["계좌", "판매경로", "연금저축", "퇴직연금", "개인연금",
                   "온라인", "오프라인", "전용", "용 클래스", "용클래스"]
 
-FUND_FEES_DB = str(Path(__file__).resolve().parent / "dataset" / "fund_fees.sqlite")
+_DATA_DIR = Path(__file__).resolve().parent / "dataset"
+FUND_FEES_DB = str(_DATA_DIR / "fund_fees.sqlite")
 
 
 # 클래스 코드 표기를 잡는다: C-P, A-E, A-e, R-A, C-P2e, S, Ae, Ce …
@@ -619,9 +638,15 @@ def _fund_core(name: str) -> str:
 class Retriever:
     """인덱스를 한 번만 로드해서 재사용한다. 요청마다 로드하면 20초씩 날아간다."""
 
-    def __init__(self, db="./dataset/chroma", collection="pension",
-                 chunks="./dataset/chunks_final.jsonl",
-                 bm25_cache="./dataset/bm25.pkl"):
+    # 기본값을 상대경로("./dataset/...")로 두면 **현재 작업 디렉터리**에
+    # 의존한다. systemd의 WorkingDirectory가 어긋나면 기동에서 죽고,
+    # 더 나쁜 경우 다른 폴더의 낡은 인덱스를 집는다. 파일 위치 기준으로
+    # 고정해 FUND_FEES_DB와 규칙을 통일한다.
+    def __init__(self, db=None, collection="pension",
+                 chunks=None, bm25_cache=None):
+        db = db or str(_DATA_DIR / "chroma")
+        chunks = chunks or str(_DATA_DIR / "chunks_final.jsonl")
+        bm25_cache = bm25_cache or str(_DATA_DIR / "bm25.pkl")
         # search.py의 embed_query()는 키가 없으면 경고만 찍고 더미 벡터를 쓴다.
         # 그 상태로 진행하면 차원이 안 맞아 Chroma에서 터지는데, 그 예외가
         # 상위에서 삼켜지면 "성능이 낮다"로 잘못 읽힌다. 여기서 먼저 끊는다.
@@ -1937,17 +1962,24 @@ def compose(state: dict) -> dict:
             break
 
         # 직전 호출과 너무 붙지 않게 한다. 빈도 제한을 다시 때리지 않기 위해서다.
-        gap = time.monotonic() - _last_call_at
-        if _last_call_at and gap < HCX_MIN_INTERVAL:
-            time.sleep(HCX_MIN_INTERVAL - gap)
+        # 락 안에서 "간격 확인 → 대기 → 시각 기록"을 끝내야 동시 요청이
+        # 실제로 벌어진다. 락 없이 하면 두 스레드가 같은 값을 읽고 같이 자다
+        # 같이 깨어나 동시에 호출한다.
+        with _HCX_LOCK:
+            gap = time.monotonic() - _last_call_at
+            if _last_call_at and gap < HCX_MIN_INTERVAL:
+                time.sleep(HCX_MIN_INTERVAL - gap)
+            _last_call_at = time.monotonic()
 
-        call_timeout = int(min(HCX_CALL_TIMEOUT, remaining - 5))
-        _last_call_at = time.monotonic()
+        # 대기한 만큼 예산이 줄었으니 timeout은 대기 **뒤에** 다시 잰다.
+        call_timeout = int(min(HCX_CALL_TIMEOUT,
+                               deadline_at - time.monotonic() - 5))
 
         try:
             state["answer"] = call_hcx(messages, max_tokens=max_toks,
                                        timeout=call_timeout)
-            _consecutive_timeouts = 0        # 성공했으니 차단기를 푼다
+            with _HCX_LOCK:
+                _consecutive_timeouts = 0    # 성공했으니 차단기를 푼다
             note = "" if attempt == 1 else f", {attempt}번째 시도"
             state["trace"].append(
                 f"compose: HCX-007로 답변 생성 (근거 {len(ev)}개, "
@@ -1974,7 +2006,8 @@ def compose(state: dict) -> dict:
             last_exc = e
             timed_out = _is_retryable(e)
             if timed_out:
-                _consecutive_timeouts += 1
+                with _HCX_LOCK:
+                    _consecutive_timeouts += 1
             state["trace"].append(
                 f"compose: {attempt}번째 시도 실패({type(e).__name__}, "
                 f"timeout={call_timeout}초, 연속실패 {_consecutive_timeouts})")
@@ -2133,7 +2166,39 @@ def to_response(state: dict) -> dict:
 # ══════════════════════════════════════════════════════════════════════
 
 _RETRIEVER: Retriever | None = None
-_CACHE: dict[str, dict] = {}     # question_id → 응답. 재시도 대비 + 호출 절약
+
+# 재시도 대비 + 호출 절약용 캐시.
+#
+# ⚠ 키를 question_id만으로 잡으면 안 된다. 평가 기간이 09.07~09.20으로 2주라
+# 주최측이 같은 id(q1, 1 …)로 **다른 질문**을 보내는 순간, 예전 문항의 답이
+# 그대로 나간다. 평가셋을 로컬에서 한 번에 돌릴 때는 절대 안 드러나는
+# 종류의 사고다. 질문 본문까지 키에 넣으면 id가 겹쳐도 답이 섞이지 않는다.
+# 무중단 2주라 상한도 필요하다 — 없으면 응답(근거 최대 9,000자 포함)이
+# 계속 쌓인다.
+_CACHE: "OrderedDict[tuple[str, str], dict]" = OrderedDict()
+_CACHE_MAX = 512
+
+
+def _cache_key(question_id: str, question: str) -> tuple[str, str]:
+    """id가 같아도 질문이 다르면 다른 키가 된다."""
+    h = hashlib.sha1((question or "").strip().encode("utf-8")).hexdigest()
+    return (str(question_id or ""), h)
+
+
+def _cache_get(key: tuple[str, str]) -> dict | None:
+    with _CACHE_LOCK:
+        if key not in _CACHE:
+            return None
+        _CACHE.move_to_end(key)
+        return _CACHE[key]
+
+
+def _cache_put(key: tuple[str, str], resp: dict) -> None:
+    with _CACHE_LOCK:
+        _CACHE[key] = resp
+        _CACHE.move_to_end(key)
+        while len(_CACHE) > _CACHE_MAX:
+            _CACHE.popitem(last=False)
 
 
 def get_retriever() -> Retriever:
@@ -2170,8 +2235,11 @@ def _trace_usage(state: dict, u0: dict, t0: float) -> None:
 
 
 def run(question: str, question_id: str = "", use_cache: bool = True) -> dict:
-    if use_cache and question_id and question_id in _CACHE:
-        return _CACHE[question_id]
+    ck = _cache_key(question_id, question)
+    if use_cache and question_id:
+        cached = _cache_get(ck)
+        if cached is not None:
+            return cached
 
     retriever = get_retriever()   # 로딩은 데드라인 측정 전에 끝내둔다
 
@@ -2186,7 +2254,7 @@ def run(question: str, question_id: str = "", use_cache: bool = True) -> dict:
         _trace_usage(state, u0, t0)
         resp = to_response(state)
         if question_id:
-            _CACHE[question_id] = resp
+            _cache_put(ck, resp)
         return resp
 
     # route를 먼저 실행해야 need_sql을 알 수 있다
@@ -2214,7 +2282,7 @@ def run(question: str, question_id: str = "", use_cache: bool = True) -> dict:
     _trace_usage(state, u0, t0)
     resp = to_response(state)
     if question_id:
-        _CACHE[question_id] = resp
+        _cache_put(ck, resp)
     return resp
 
 

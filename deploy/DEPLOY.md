@@ -46,10 +46,39 @@ pip install -r requirements.txt
 
 `.env`는 git에 올라가지 않으므로(`.gitignore`) **직접 서버에 옮겨야 합니다** — scp로
 복사하거나 새로 만드세요. `CLAUDE_API_KEY` 등 CLOVA Studio 키 4종이 들어있어야
-`agent.py`가 정상 동작합니다.
+`agent.py`가 정상 동작합니다. `.env`는 `agent.py`와 **같은 폴더**에 두세요
+(agent.py가 자기 파일 위치 기준으로 읽습니다).
 
-`dataset/` 아래 `chroma/`, `emb_cache.sqlite`, `fund_fees.sqlite`, `chunks_final.jsonl`도
-git에 안 올라가는 대용량 산출물이면 별도로 옮겨야 합니다 (`.gitignore` 확인).
+### 옮겨야 할 데이터 — 4개뿐입니다
+
+`dataset/`은 전부 합치면 585MB지만, 서버가 **실행 중에 실제로 여는 건 4개**입니다.
+나머지는 인덱스를 만들 때만 쓰는 중간 산출물이라 서버에 없어도 됩니다.
+
+| 옮긴다 | 크기 | | 안 옮겨도 된다 | 크기 |
+|---|---|---|---|---|
+| `dataset/chroma/` | 290M | | `dataset/docs/` | 58M |
+| `dataset/bm25.pkl` | 70M | | `dataset/chunks.jsonl` | 69M |
+| `dataset/chunks_final.jsonl` | 31M | | `dataset/emb_cache.sqlite` | 67M |
+| `dataset/fund_fees.sqlite` | 124K | | | |
+
+합계 **약 391MB**. `emb_cache.sqlite`는 임베딩을 다시 만들 때 쓰는 캐시라
+`embed_and_index.py`만 봅니다 — 서버 코드에서는 열지 않습니다.
+
+```bash
+# 로컬에서
+tar czf runtime_data.tgz dataset/chroma dataset/bm25.pkl \
+    dataset/chunks_final.jsonl dataset/fund_fees.sqlite
+scp runtime_data.tgz .env {서버}:/opt/pension-agent/
+# 서버에서
+cd /opt/pension-agent && tar xzf runtime_data.tgz && rm runtime_data.tgz
+```
+
+옮긴 뒤 확인:
+
+```bash
+cd /opt/pension-agent && source venv/bin/activate
+python verify_deploy_fix.py      # 경로·캐시·호출간격을 HCX 없이 점검
+```
 
 ## 3. 서비스 등록 (systemd)
 
