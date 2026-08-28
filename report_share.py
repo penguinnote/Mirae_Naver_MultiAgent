@@ -7,7 +7,8 @@ score_official.py의 콘솔 출력은 터미널용이라 상위 15개만 보여�
 카테고리별 집계를 붙인다.
 
     python report_share.py --raw raw_holdout_v2.json --gold gold_holdout_v2.json
-    python report_share.py --raw ... --gold ... --hide-gold
+    python report_share.py --raw ... --gold ... --all        (전 문항 정답까지)
+    python report_share.py --raw ... --gold ... --hide-gold  (정답 가림)
     python report_share.py --raw ... --gold ... --compare raw_이전.json
 
 ⚠ --hide-gold 를 빼면 **정답과 채점 키워드가 그대로 문서에 들어간다.**
@@ -58,7 +59,8 @@ def bar(x, width=12):
     return BAR * n + "·" * (width - n)
 
 
-def build(rows, gold_path, raw_path, hide_gold, cmp_rows=None):
+def build(rows, gold_path, raw_path, hide_gold, cmp_rows=None,
+          show_all=False):
     s = S.summarize(rows)
     L = []
     a = L.append
@@ -128,17 +130,32 @@ def build(rows, gold_path, raw_path, hide_gold, cmp_rows=None):
 
     bad = [r for r in rows if r["answer_cov"] < 0.999
            or r.get("contradiction_hits")]
-    a(f"## 만점이 아닌 문항 {len(bad)}개")
+    shown = rows if show_all else bad
+    a(f"## {'전 문항 상세' if show_all else f'만점이 아닌 문항 {len(bad)}개'}")
     a("")
-    if not bad:
+    if not shown:
         a("없음.")
-    for r in bad:
-        a(f"### {r['question_id']} · {r.get('category','')} · "
+    for r in shown:
+        mark = "✅" if (r["answer_cov"] >= 0.999
+                        and not r.get("contradiction_hits")) else (
+            "⚠️" if r["answer_cov"] > 0 else "❌")
+        a(f"### {mark} {r['question_id']} · {r.get('category','')} · "
           f"{pct(r['answer_cov'])}")
         a("")
-        a(f"**질문** {one_line(r.get('question'), 300)}")
+        a(f"**질문**")
         a("")
-        a(f"**우리 답변** {one_line(r.get('answer'), 400)}")
+        a(f"> {one_line(r.get('question'), 400)}")
+        a("")
+        # 정답을 답변보다 **먼저** 놓는다. 채점 결과를 읽을 때
+        # "무엇이 맞는 답이었나"를 먼저 알아야 우리 답을 판단할 수 있다.
+        if not hide_gold and r.get("gold_answer"):
+            a(f"**정답**")
+            a("")
+            a(f"> {one_line(r.get('gold_answer'), 400)}")
+            a("")
+        a(f"**우리 답변**")
+        a("")
+        a(f"> {one_line(r.get('answer'), 500)}")
         a("")
         if r.get("missing"):
             if hide_gold:
@@ -146,13 +163,12 @@ def build(rows, gold_path, raw_path, hide_gold, cmp_rows=None):
                   f"(내용은 정답지 보호를 위해 생략)")
             else:
                 for m in r["missing"]:
-                    a(f"**누락**(w={m.get('weight')}) `{m.get('want')}`")
+                    a(f"**누락**(가중치 {m.get('weight')}) "
+                      f"— 다음 중 하나가 답변에 있어야 함: `{m.get('want')}`")
+            a("")
         if r.get("contradiction_hits"):
             a(f"**⚠ 모순 표현 감지** `{r['contradiction_hits']}`")
-        if not hide_gold and r.get("gold_answer"):
             a("")
-            a(f"**정답** {one_line(r.get('gold_answer'), 300)}")
-        a("")
 
     a("---")
     a("")
@@ -176,11 +192,13 @@ def main():
     ap.add_argument("--out", help="저장 경로 (기본: 공유_{평가셋}.md)")
     ap.add_argument("--hide-gold", action="store_true",
                     help="정답·채점 키워드를 가린다 (홀드아웃 보호)")
+    ap.add_argument("--all", action="store_true",
+                    help="맞힌 문항까지 전 문항의 질문·정답·답변을 싣는다")
     a = ap.parse_args()
 
     rows = S.run(Path(a.raw), Path(a.gold))
     cmp_rows = S.run(Path(a.compare), Path(a.gold)) if a.compare else None
-    md = build(rows, a.gold, a.raw, a.hide_gold, cmp_rows)
+    md = build(rows, a.gold, a.raw, a.hide_gold, cmp_rows, a.all)
 
     out = Path(a.out or f"공유_{Path(a.gold).stem}.md")
     out.write_text(md, encoding="utf-8")
