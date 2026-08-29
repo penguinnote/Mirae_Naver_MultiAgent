@@ -747,20 +747,80 @@ def _doc_label(e: dict) -> str:
         name = _FUND_TRIM.sub("", fn).strip()
         return f"{name} 투자설명서" if name else "투자설명서"
     doc = e.get("doc_id") or ""
-    return _DOC_TITLE_FIX.get(doc) or _DOC_TITLES.get(doc) or (doc or "공통 조항")
+    # 실측(H3-02): 펀드 문서인데 그 청크에 fund_name이 없으면
+    # 'KR5153450009'가 그대로 노출됐다. 없애려던 바로 그 형태다.
+    return _DOC_TITLE_FIX.get(doc) or _DOC_TITLES.get(doc) or (
+        "투자설명서" if re.fullmatch(r"KR[0-9A-Z]{8,}", doc) else (doc or "공통 조항"))
 
 
-def _source_line(ev: list) -> str:
-    """답변 끝에 붙일 근거 목록 한 줄. 중복은 합치고 최대 5개까지."""
+_SRC_TOK = re.compile(r"[가-힣A-Za-z]{4,}|\d+(?:\.\d+)?")
+
+
+def _fund_named_in(question: str, fund_name: str) -> bool:
+    """질문이 이 펀드를 **지목했는가**.
+
+    펀드명 전체가 질문에 나오는 일은 없다. 사용자는 '미래에셋 라이프사이클
+    2050 펀드'라고 쓰지 '…연금증권전환형자투자신탁1호(주식)'라고 쓰지 않는다.
+    계열 뿌리의 앞머리(6자 이상)가 질문에 있으면 지목한 것으로 본다.
+    """
+    core = _NS_RE.sub("", N(_fund_core(fund_name or "").replace("미래에셋", "")))
+    q = _NS_RE.sub("", N(question or "")).replace("미래에셋", "")
+    for n in range(len(core), 5, -1):
+        if core[:n] in q:
+            return True
+    return False
+
+
+def _source_line(ev: list, answer: str = "", question: str = "") -> str:
+    """답변 끝에 붙일 근거 목록. **실제로 쓴 근거만** 남긴다.
+
+    검색된 상위 8~10개를 그대로 나열하면 안 된다. 평가지표(과제자료 p.07)의
+    '근거 완전성'은 "질의 대상과 무관하거나 대상이 다른 근거를 배제했는가"를
+    본다. 실측(홀드아웃 v3, 2026-08-29): 비밀번호 초기화 질문에 '퇴직연금
+    장외채권 매수 가이드'가, 성장유망중소형주 질문에 '라이프사이클7090'이
+    근거로 붙었다. 근거를 밝히려다 오히려 감점 요인을 만든 셈이다.
+
+    근거 덩어리의 특징적인 낱말(4자 이상 한글·영문, 숫자)이 답변에 얼마나
+    나타나는지로 고른다. 절대 기준 하나로는 질문마다 편차가 커서, 가장 많이
+    겹친 근거 대비 **상대 기준**을 함께 쓴다.
+    """
+    if not ev:
+        return ""
+
+    # 질문이 특정 펀드를 지목했다면, **다른 펀드**의 설명서는 근거가 아니다.
+    # 실측(H3-06): '라이프사이클 2050' 질문에 인덱스플러스·고배당포커스·
+    # 코어밸류 설명서가 근거로 붙었다. 지목한 계열이 근거에 하나라도 있을
+    # 때만 건다 — 하나도 없으면 검색이 빗나간 것이라 여기서 고칠 수 없다.
+    if question:
+        named = [e for e in ev if e.get("fund_name")
+                 and _fund_named_in(question, e["fund_name"])]
+        if named:
+            ev = [e for e in ev if not e.get("fund_name")
+                  or _fund_named_in(question, e["fund_name"])]
+
+    plain = re.sub(r"\s", "", (answer or "").split("※ 근거:")[0])
+    scored = []
+    for e in ev:
+        toks = {t for t in _SRC_TOK.findall(e.get("text") or "")
+                if len(t) >= 4 or (t[:1].isdigit() and len(t) >= 2)}
+        scored.append((sum(1 for t in toks if t in plain), e))
+
+    top = max((h for h, _ in scored), default=0)
+    keep = [e for h, e in scored if h >= 3 and h >= top * 0.4]
+    if not keep:
+        # 하나도 안 걸리면 그래도 표시는 해야 한다(p.07 요구사항).
+        # 가장 많이 겹친 둘만 남긴다.
+        keep = [e for _h, e in sorted(scored, key=lambda x: -x[0])[:2]]
+
     seen, out = set(), []
-    for e in ev or []:
+    for e in keep:
         lab = _doc_label(e)
         if e.get("page"):
             lab += f" {e['page']}쪽"
         if lab not in seen:
             seen.add(lab)
             out.append(lab)
-        if len(out) >= 5:
+        if len(out) >= 4:
             break
     return ("\n\n※ 근거: " + " · ".join(out)) if out else ""
 
@@ -834,6 +894,11 @@ class Retriever:
             if len(t) >= 3:
                 _DOC_TITLES[doc] = t
 
+        # 펀드 문서는 코드가 아니라 펀드명으로 부른다.
+        for fc, nm in fund_names.items():
+            if nm:
+                _DOC_TITLES.setdefault(fc, _doc_label({"fund_name": nm}))
+
         # 이름 뒤에 **번호가 붙는 계열**을 따로 색인한다.
         # fund_core_index는 번호를 남기므로 라이프사이클2030과 7090이 서로
         # 다른 뿌리가 된다. 없는 번호를 짚었는지 판정하려면 번호를 뗀 색인이
@@ -845,6 +910,27 @@ class Retriever:
                 fam, num = m.group(1), m.group(2)
                 if len(fam) >= 3:
                     self.fund_series.setdefault(fam, {})[num] = name
+
+        # 투자설명서가 없어도 **본문에 언급된 번호**는 자료에 있는 것이다.
+        # 실측(H3-06): 라이프사이클 3040·4050·5060·6070은 다른 펀드의
+        # '전환가능 집합투자기구' 목록에 34~37회 나오지만 투자설명서는 없다.
+        # 이름 색인만 보면 2030·7090뿐이라 목록이 실제보다 좁아진다.
+        #
+        # 다만 **폐지된 옛 이름**을 주워오면 안 된다. 라이프사이클6090은
+        # 2009년에 7090으로 바뀐 이름이고 '명칭변경' 이력 표에만 2회 나온다.
+        # 살아 있는 계열은 전환가능 목록마다 반복되므로 등장 횟수로 갈린다.
+        _SERIES_MIN_HITS = 5
+        if self.fund_series:
+            _fam_re = re.compile(
+                "(" + "|".join(re.escape(f) for f in self.fund_series) + r")(\d{3,4})(?!\d)")
+            _hits: dict = {}
+            for _m in self.meta:
+                for _mm in _fam_re.finditer(_NS_RE.sub("", N(_m.get("text") or ""))):
+                    _hits[(_mm.group(1), _mm.group(2))] = _hits.get(
+                        (_mm.group(1), _mm.group(2)), 0) + 1
+            for (_fam, _num), _n in _hits.items():
+                if _n >= _SERIES_MIN_HITS:
+                    self.fund_series.setdefault(_fam, {}).setdefault(_num, _fam + _num)
 
     # ── 짧은 이웃 청크 보강 ────────────────────────────────────────
     NEIGHBOR_MAX_CHARS = 300   # 이보다 짧은 청크만 덤으로 붙인다
@@ -2638,7 +2724,8 @@ def to_response(state: dict) -> dict:
     # 지우도록 되어 있어서, 먼저 붙이면 방금 붙인 줄을 도로 지운다.
     _ans = str(state.get("answer") or "")
     if _ans and not state.get("_blocked"):
-        _line = _source_line(state.get("evidence") or [])
+        _line = _source_line(state.get("evidence") or [], _ans,
+                             str(state.get("question") or ""))
         if _line and "※ 근거:" not in _ans:
             _ans += _line
             state.setdefault("trace", []).append(
