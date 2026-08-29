@@ -678,6 +678,93 @@ def N(s: str) -> str:
     return unicodedata.normalize("NFC", s or "")
 
 
+# 문서 이름 짓기.
+#
+# 과제 소개자료 p.07: "모든 답변에는 근거 문서 표시할 것".
+# 그런데 상담을 받는 사람에게 'doc46'은 아무 의미가 없다. 그래서 문서의
+# 첫 쪽 앞머리에서 **사람이 읽을 수 있는 제목**을 뽑아 그걸 표시한다.
+# 58개 중 50개가 이 규칙으로 깔끔하게 나오고, 나머지는 아래 표로 채운다.
+_CID_PAGE_RE = re.compile(r"_p(\d+)_(\d+)$")
+_TITLE_STOP = re.compile(r"[■●▶]|\d{4}\.\s?\d{1,2}\.\s?\d{1,2}|\s\d+\.\s*|\s가\.\s|제\s?\d+\s?부|\?|:")
+_TITLE_ENDER = re.compile(
+    r"^(.{4,26}?(?:안내|개요|가이드|FAQ|매뉴얼|정리|체크 포인트|서비스|업무|기본))(?:\s|$)")
+_TITLE_NOISE = re.compile(
+    r"MIRAE ASSET|미래에셋증권|Mirae Asset|한국금융투자협회[^)]*\)|\[?업무매뉴얼\]?")
+
+# 앞머리만으로는 이름이 안 나오는 문서들. 내용을 직접 확인해 붙였다.
+# 특히 doc46~50은 앞 문단이 **다섯 개 모두 똑같아서**(중도인출 제도 총설)
+# 자동 추출로는 구분이 안 된다. 사유별로 갈라 적는다.
+_DOC_TITLE_FIX = {
+    "doc27": "출연연 가입자 개인부담금 FAQ",
+    "doc28": "퇴직연금 운용방법 변경 FAQ",
+    "doc31": "디폴트옵션 안내",
+    "doc35": "실물이전제도 안내",
+    "doc37": "연금 인출 가이드",
+    "doc46": "중도인출 — 요양",
+    "doc47": "중도인출 — 회생·파산",
+    "doc48": "중도인출 — 임차보증금(전세)",
+    "doc49": "중도인출 — 무주택자 주택구입",
+    "doc50": "중도인출 — 재난",
+    "doc51": "퇴직금 연금수령 절세 안내",
+    "doc53": "퇴직연금 ETF 안내",
+    "doc57": "퇴직급여 청구 절차",
+}
+_DOC_TITLES: dict = {}          # Retriever가 인덱스를 올릴 때 채운다
+
+
+def _make_title(text: str) -> str:
+    t = " ".join((text or "").split())
+    t = _TITLE_NOISE.sub(" ", t)
+    t = re.sub(r"^[#■●▶\-·\s\[\]]+", "", t)
+    t = _TITLE_STOP.split(t)[0].strip()
+    m = _TITLE_ENDER.match(t)
+    if m:
+        t = m.group(1)
+    else:
+        flat = re.sub(r"\s", "", t)
+        head = flat[:4]
+        p = flat.find(head, 4) if head else -1
+        if 6 <= p <= 30:                      # 제목이 본문 첫머리에서 반복되는 꼴
+            cnt, out = 0, []
+            for ch in t:
+                if not ch.isspace():
+                    cnt += 1
+                if cnt > p:
+                    break
+                out.append(ch)
+            t = "".join(out)
+    return t.strip(" -·[]#:,")[:26].rstrip(" -·,")
+
+
+_FUND_TRIM = re.compile(r"\(.*?\)|제?\d+호|증권(전환형)?(모|자)?투자신탁")
+
+
+def _doc_label(e: dict) -> str:
+    """근거 한 덩어리를 사람이 읽을 수 있는 문서 이름으로 바꾼다."""
+    fn = e.get("fund_name")
+    if fn:
+        # 계열을 구분하는 말(단기·중장기·장기)은 반드시 남긴다.
+        name = _FUND_TRIM.sub("", fn).strip()
+        return f"{name} 투자설명서" if name else "투자설명서"
+    doc = e.get("doc_id") or ""
+    return _DOC_TITLE_FIX.get(doc) or _DOC_TITLES.get(doc) or (doc or "공통 조항")
+
+
+def _source_line(ev: list) -> str:
+    """답변 끝에 붙일 근거 목록 한 줄. 중복은 합치고 최대 5개까지."""
+    seen, out = set(), []
+    for e in ev or []:
+        lab = _doc_label(e)
+        if e.get("page"):
+            lab += f" {e['page']}쪽"
+        if lab not in seen:
+            seen.add(lab)
+            out.append(lab)
+        if len(out) >= 5:
+            break
+    return ("\n\n※ 근거: " + " · ".join(out)) if out else ""
+
+
 def _fund_core(name: str) -> str:
     """펀드명에서 기간 수식어·괄호·호수·상품유형 접미사를 제거해 계열 뿌리만 남긴다."""
     core = re.sub(r"\(.*?\)", "", name or "")           # (채권)/(주식) 등 괄호 제거
@@ -729,6 +816,23 @@ class Retriever:
             core = _fund_core(name).replace("미래에셋", "")
             if len(core) >= 2:
                 self.fund_core_index.setdefault(core, []).append((fc, name))
+
+        # 문서별 제목을 뽑아둔다(첫 쪽·첫 청크 기준).
+        # chunk_id를 문자열로 정렬하면 'doc31_p10'이 'doc31_p1_'보다 앞서서
+        # 10쪽을 첫 쪽으로 잡는다. 쪽 번호는 반드시 숫자로 비교해야 한다.
+        _best: dict = {}
+        for m in self.meta:
+            doc = m.get("doc_id") or ""
+            mm = _CID_PAGE_RE.search(m.get("chunk_id") or "")
+            if not doc.startswith("doc") or not mm:
+                continue
+            key = (int(mm.group(1)), int(mm.group(2)))
+            if doc not in _best or key < _best[doc][0]:
+                _best[doc] = (key, m.get("text") or "")
+        for doc, (_k, text) in _best.items():
+            t = _make_title(text)
+            if len(t) >= 3:
+                _DOC_TITLES[doc] = t
 
         # 이름 뒤에 **번호가 붙는 계열**을 따로 색인한다.
         # fund_core_index는 번호를 남기므로 라이프사이클2030과 7090이 서로
@@ -1851,8 +1955,12 @@ SYSTEM_PROMPT = """당신은 미래에셋증권의 연금 상담 전문가입니
 이 첫 줄은 **시스템 내부 표시**입니다. 답변에 옮기지 마십시오.
 `[근거 3]`, `doc55`, `1쪽` 같은 표시는 상담을 받는 사람에게 아무 의미가
 없습니다. 그 사람은 doc55가 무슨 문서인지 모르고, 애초에 자료를 갖고
-있지도 않습니다. 출처는 시스템이 별도 항목으로 따로 제출하므로,
-본문에서 다시 밝힐 필요가 없습니다.
+있지도 않습니다.
+
+**근거 문서는 답변 맨 끝에 시스템이 자동으로 붙입니다.**
+`※ 근거: 퇴직연금과 압류 · 개인형 퇴직연금제도(IRP)` 처럼 사람이 읽을 수
+있는 문서 이름으로 나갑니다. 그러니 본문에는 직접 쓰지 마십시오.
+`※ 근거:` 줄을 직접 만들어 붙이지도 마십시오 — 중복됩니다.
 
     나쁨: "이는 doc55 1쪽에서 확인할 수 있습니다."
     나쁨: "총보수는 0.25%입니다(하나파워e단기채 투자설명서 5쪽)."
@@ -2525,13 +2633,24 @@ def to_response(state: dict) -> dict:
         ctx_parts.append(block)
         used += len(block)
 
+    # 근거 문서를 답변 끝에 붙인다 — 과제 소개자료 p.07의 요구사항이다.
+    # 출처 표기를 걷어낸 **뒤에** 붙여야 한다. 제거기가 '문서명 N쪽' 꼴을
+    # 지우도록 되어 있어서, 먼저 붙이면 방금 붙인 줄을 도로 지운다.
+    _ans = str(state.get("answer") or "")
+    if _ans and not state.get("_blocked"):
+        _line = _source_line(state.get("evidence") or [])
+        if _line and "※ 근거:" not in _ans:
+            _ans += _line
+            state.setdefault("trace", []).append(
+                "출처 정리: 답변 끝에 근거 문서 목록을 붙임")
+
     return {
         "question_id": str(state.get("question_id") or ""),
         "question": str(state["question"]),
         "retrieved_context": "\n\n---\n\n".join(ctx_parts),
         "think_trace": "\n".join(f"[{i}] {s}"
                                  for i, s in enumerate(state.get("trace") or [], 1)),
-        "answer": str(state.get("answer") or ""),
+        "answer": _ans,
     }
 
 
