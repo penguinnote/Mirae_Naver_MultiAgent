@@ -49,6 +49,7 @@ import re
 import sys
 import threading
 import time
+import unicodedata
 from collections import OrderedDict
 from datetime import date
 from itertools import zip_longest
@@ -667,6 +668,16 @@ _FUND_VARIANT_WORDS = ["초단기", "중단기", "중장기", "초장기", "단�
 _FUND_SUFFIX_WORDS = ["증권자투자신탁", "증권투자신탁", "자투자신탁", "투자신탁", "증권"]
 
 
+# "라이프사이클2030"처럼 **이름 뒤에 번호가 붙는** 계열을 잡는다.
+_SERIES_RE = re.compile(r"([가-힣A-Za-z]{3,20})(\d{3,4})(?!\d)")
+_NS_RE = re.compile(r"[\s·,/\-]")
+
+
+def N(s: str) -> str:
+    """맥 파일명·한글 입력의 자소 분리(NFD)를 NFC로 맞춘다."""
+    return unicodedata.normalize("NFC", s or "")
+
+
 def _fund_core(name: str) -> str:
     """펀드명에서 기간 수식어·괄호·호수·상품유형 접미사를 제거해 계열 뿌리만 남긴다."""
     core = re.sub(r"\(.*?\)", "", name or "")           # (채권)/(주식) 등 괄호 제거
@@ -718,6 +729,18 @@ class Retriever:
             core = _fund_core(name).replace("미래에셋", "")
             if len(core) >= 2:
                 self.fund_core_index.setdefault(core, []).append((fc, name))
+
+        # 이름 뒤에 **번호가 붙는 계열**을 따로 색인한다.
+        # fund_core_index는 번호를 남기므로 라이프사이클2030과 7090이 서로
+        # 다른 뿌리가 된다. 없는 번호를 짚었는지 판정하려면 번호를 뗀 색인이
+        # 따로 있어야 한다.  {계열명: {번호: 펀드명}}
+        self.fund_series: dict = {}
+        for name in fund_names.values():
+            flat = _NS_RE.sub("", N(name or ""))
+            for m in _SERIES_RE.finditer(flat):
+                fam, num = m.group(1), m.group(2)
+                if len(fam) >= 3:
+                    self.fund_series.setdefault(fam, {})[num] = name
 
     # ── 짧은 이웃 청크 보강 ────────────────────────────────────────
     NEIGHBOR_MAX_CHARS = 300   # 이보다 짧은 청크만 덤으로 붙인다
@@ -783,6 +806,42 @@ class Retriever:
                 if best is None or len(funds) > len(best):
                     best = funds
         return best
+
+    def detect_missing_variant(self, question: str) -> list:
+        """질문이 짚은 '계열명+번호'가 자료에 없을 때, **자료에 있는 번호들**을 돌려준다.
+
+        실측(홀드아웃 v3 H3-06, 2026-08-29): "미래에셋 라이프사이클 2050"을
+        물었는데 자료에는 2030·3040·4050·7090뿐이다. 모델은 없다고 말하는
+        대신 다른 펀드(글로벌 그레이트 컨슈머)의 전략을 끌어와 단정했다.
+        평가지표의 '근거 기반(Hallucination)'에 정면으로 걸리는 실패다.
+
+        모델이 알아서 눈치채기를 기대하지 않고 **코드로 판정**한다. 검색 근거
+        안에 계열 목록이 실제로 들어 있어도 모델은 2030·3040·4050에 없는
+        5060·6070까지 지어냈다 — 패턴을 이어 붙이는 쪽으로 흐른다.
+
+        오탐을 막는 조건이 둘이다.
+          · 같은 계열에 **번호가 붙은 펀드가 2개 이상** 있어야 한다.
+            그래야 "번호로 갈리는 시리즈"라고 볼 수 있다.
+          · 질문의 번호가 그 목록에 **없어야** 한다.
+        이 둘이 아니면 아무것도 하지 않는다. "연금저축 600만원"처럼 이름 뒤에
+        숫자가 오는 평범한 문장은 계열 조건에서 걸러진다.
+        """
+        flat = _NS_RE.sub("", N(question or ""))
+        found, seen = [], set()
+        for m in _SERIES_RE.finditer(flat):
+            fam, num = m.group(1), m.group(2)
+            if len(fam) < 3:
+                continue
+            for key, sib in self.fund_series.items():
+                if not (key.endswith(fam) or fam.endswith(key)):
+                    continue
+                if len(sib) < 2 or num in sib or key in seen:
+                    continue
+                seen.add(key)
+                found.append({"asked": f"{fam}{num}", "family": key,
+                              "have": sorted(sib), "names": [sib[k] for k in sorted(sib)]})
+                break
+        return found
 
     def _fund_evidence(self, query_emb, question: str, fund_code: str, k: int) -> list:
         """한 펀드로 범위를 좁혀 벡터+BM25를 각각 돌리고 합친다.
@@ -866,6 +925,16 @@ class Retriever:
         q = state["question"]
         r = state.get("route") or {}
         doc_type, fund = r.get("doc_type"), r.get("fund_code")
+
+        # 없는 번호를 짚었는지 먼저 본다. 검색 결과와 무관하게 성립하는
+        # 판정이라 어느 분기로 빠지든 결과가 남도록 맨 앞에서 한다.
+        miss = self.detect_missing_variant(q)
+        if miss:
+            state["missing_variant"] = miss
+            for mv in miss:
+                state["trace"].append(
+                    f"retrieve: '{mv['asked']}'는 자료에 없음 — "
+                    f"{mv['family']} 계열 실제 번호 {', '.join(mv['have'])}")
 
         # 폴백으로 재진입할 때 같은 질의를 다시 임베딩하지 않는다.
         # CLOVA 호출 1회 = 데드라인에서 그만큼 손해다.
@@ -1818,11 +1887,38 @@ SYSTEM_PROMPT = """당신은 미래에셋증권의 연금 상담 전문가입니
      제공하지 않아 근거만으로는 하나의 정답을 고를 수 없는 경우(예: "좋은 상품
      추천해주세요"), 다음 두 가지를 **모두** 하십시오.
        ① 정확한 답을 드리려면 어떤 정보(투자성향·계좌유형·투자기간 등)가
-          필요한지 먼저 명시하십시오.
+          필요한지 **되묻는 질문 형태로** 먼저 밝히십시오.
+          예) "원금 손실을 어느 정도까지 감내하실 수 있나요?"
+              "퇴직연금(DC·IRP) 계좌인가요, 연금저축 계좌인가요?"
+          상품을 제시할 때는 근거에 있는 **위험등급**을 함께 적으십시오.
+          등급은 자료로 확인되는 객관적 기준이라 단정 없이 비교할 수 있게 해줍니다.
        ② 그 다음, 근거 자료에 있는 일반적인 기준(예: 총보수가 낮은 상품,
           안정형이면 채권형)으로 답할 수 있는 만큼 답하십시오.
      이 API는 단발성 요청이라 되물어도 답을 받을 수 없습니다. 정보 부족을
      이유로 답변 자체를 생략하거나 질문만 던지고 끝내지 마십시오.
+
+5-e) 질문이 **자료에 없는 상품·제도·클래스를 지목**하면, 있는 것처럼 답하지
+     마십시오. 비슷한 이름이 자료에 있으면 **그 목록을 정확히 적고 어느 것을
+     뜻했는지 되물으십시오.**
+
+     ⚠ 되묻고 끝내면 안 됩니다. 이 상담은 **한 번의 답변으로 끝납니다.**
+     사용자가 다시 답할 기회가 없으므로, 확인 질문과 답을 **같은 답변 안에**
+     담아야 합니다. 네 가지를 모두 넣으십시오.
+       ① 지목한 것이 자료에 없다는 사실
+       ② 자료에 실제로 있는 것의 목록
+       ③ 어느 것을 뜻했는지 확인하는 질문
+       ④ 그중 가장 가까운 것으로 답할 수 있는 내용
+
+     예) "라이프사이클 2050의 자산배분 전략은?"
+       나쁨: "라이프사이클 2050은 글로벌 그레이트 컨슈머 전략을 씁니다."
+             → 없는 상품에 다른 상품의 내용을 갖다 붙인 것입니다.
+       나쁨: "어떤 펀드를 말씀하시는 건가요?"
+             → 되묻기만 하고 답이 없으면 이 상담은 그대로 끝납니다.
+       좋음: "자료에서 확인되는 라이프사이클 시리즈는 2030과 7090이며 2050은
+             없습니다. 혹시 2030을 뜻하신 것이었나요? 2030 기준으로 말씀드리면 …"
+
+     ⚠ 목록에 없는 이름·번호를 **추측해서 채우지 마십시오.** 자료에 있는 것만
+     적습니다. 그럴듯한 번호를 이어 붙이는 것이 가장 흔한 실수입니다.
 
 [규칙 6 — 분류를 물으면 표준 분류어로 답한다]
 상품유형·위험등급처럼 정해진 분류 체계가 있는 것은 그 체계의 용어를
@@ -1991,6 +2087,18 @@ def compose(state: dict) -> dict:
         "6) 시각·계좌번호 체계·코드는 근거의 표기 그대로 옮기십시오. "
         "예) '08:00 ~ 15:00', '개인IRP계좌번호 + 22'"
     )
+
+    # 코드가 "없는 번호"를 잡아냈으면 그 사실을 규칙 5-e와 함께 못박는다.
+    # 근거 안에 계열 목록이 들어 있어도 모델은 없는 번호를 이어 붙였다(H3-06).
+    for mv in (state.get("missing_variant") or []):
+        user_suffix += (
+            f"\n\n※ 질문이 지목한 '{mv['asked']}'은(는) 자료에 없습니다. "
+            f"자료에 있는 {mv['family']} 계열은 "
+            f"{', '.join(mv['have'])} 뿐입니다.\n"
+            f"규칙 5-e대로 ① 없다는 사실 ② 이 목록 ③ 어느 것을 뜻했는지 "
+            f"확인하는 질문 ④ 가장 가까운 것으로 답할 수 있는 내용을 "
+            f"**한 답변에 모두** 담으십시오. "
+            f"위 목록에 없는 번호를 덧붙이지 마십시오.")
 
     messages = [
         {"role": "system",
