@@ -80,6 +80,23 @@ def is_numeric_cell(s: str) -> bool:
     return bool(s) and bool(NUM_RE.match(s.strip()))
 
 
+def _row_label(c: list[str], class_col: int) -> str:
+    """행의 실제 클래스 라벨 텍스트를 찾는다.
+
+    헤더에서 잡은 class_col 자리에 값이 있으면 그대로 쓴다. 없으면(같은 표
+    안에서도 행마다 들여쓰기가 달라 라벨이 한 칸 옆으로 밀리는 경우가 흔하다)
+    첫 숫자 셀 앞에 있는 첫 비어있지 않은 셀을 라벨로 본다 — 이 표들은
+    항상 '라벨 다음에 숫자'라는 순서를 지킨다.
+    """
+    if class_col < len(c) and c[class_col]:
+        return c[class_col]
+    first_num = next((idx for idx, x in enumerate(c) if is_numeric_cell(x)), len(c))
+    for x in c[:first_num]:
+        if x:
+            return x
+    return ""
+
+
 def find_fee_tables(text: str):
     """청크 텍스트 안에서 '클래스+총보수' 표를 전부 찾아 (헤더 컬럼맵, 데이터행들) 리스트로.
 
@@ -122,15 +139,37 @@ def find_fee_tables(text: str):
             j += 1
 
         merged = ["" for _ in range(ncols)]
+        seen = ["" for _ in range(ncols)]  # "동종유형" 판별 전용 — 절대 덮어쓰지 않고 이어붙인다
         for row in header_rows:
             for k, v in enumerate(row):
                 if v:
                     merged[k] = v  # 안쪽(나중) 값으로 덮어씀 — 이어붙이지 않음
+                    seen[k] = seen[k] + v
         merged_n = [norm_header(m) for m in merged]
+        seen_n = [norm_header(m) for m in seen]
 
-        fee_total_col = next(
-            (k for k, m in enumerate(merged_n)
-             if k != class_col and "총보수" in m and "동종유형" not in m and "비용" not in m), None)
+        # "동종유형"은 여러 표 행에 걸쳐 "동종"/"유형"으로 쪼개지는 경우가 있는데,
+        # merged_n은 마지막 조각만 남기므로("총보수"만 남고 "동종유형"이 사라짐)
+        # 이 필터만은 절대 안 잃어버리는 seen_n(이어붙인 값)으로 판별한다.
+        # (실측: KR5122420005 p37 표 — "동종유형총보수" 컬럼이 "총보수"로 오인식돼
+        # fee_total_col으로 잘못 잡혔고, 같은 펀드의 총보수가 표마다 0.30/0.34로
+        # 어긋나는 원인이었다.)
+        def _pick_fee_total_col(text_list):
+            return next(
+                (k for k, m in enumerate(text_list)
+                 if k != class_col and "총보수" in m and "동종유형" not in seen_n[k] and "비용" not in m),
+                None)
+
+        fee_total_col = _pick_fee_total_col(merged_n)
+        if fee_total_col is None:
+            # merged_n은 "총"과 "보수"가 서로 다른 헤더 행에 걸쳐 있으면 마지막 조각
+            # ("보수"만)만 남겨 "총보수" 매칭 자체가 실패하는 경우가 있다. 이때만
+            # 안 잃어버리는 seen_n으로 다시 찾는다 — merged_n으로 이미 찾은 표는
+            # 손대지 않으므로 기존에 맞던 표에는 영향이 없다.
+            # (실측: KR5111420047·KR5111450067 — 실제 "동종유형" 평균값이 이 펀드
+            # 자신의 총보수로 잘못 기록되고 있었다. 데이터가 아예 없는 것보다
+            # 틀린 숫자가 있는 쪽이 더 나쁘다.)
+            fee_total_col = _pick_fee_total_col(seen_n)
         if fee_total_col is None:
             # 총보수 컬럼이 없는 표(환매/전환수수료, 좌수 변동 등) — 우리가 원하는 표가 아님
             i = j
@@ -161,22 +200,39 @@ def find_fee_tables(text: str):
             c = cells(lines[k])
             if len(c) != ncols:
                 break
-            label = c[class_col] if class_col < len(c) else ""
             n_numeric = sum(1 for x in c if is_numeric_cell(x))
+            row_label = _row_label(c, class_col)
             prev_label = data_rows[-1][class_col] if data_rows else ""
             prev_complete = bool(re.search(r"[)）]\s*$", prev_label))
             if n_numeric >= 1:
+                # 들여쓰기가 행마다 달라 라벨이 헤더가 잡은 class_col이 아니라
+                # 한 칸 옆에 찍히는 경우가 있다(같은 표 안에서도 행마다 다름).
+                # _row_label이 실제 위치를 찾아주므로, class_col 자리를 그 값으로
+                # 맞춰 넣어야 이후 로직(이어붙이기·최종 추출)이 정상 동작한다.
+                if class_col < len(c) and row_label:
+                    c = list(c)
+                    c[class_col] = row_label
                 data_rows.append(list(c))
                 blank_streak = 0
-            elif label and data_rows and len(label) <= 20 and not prev_complete:
+            elif row_label and data_rows and len(row_label) <= 20 and not prev_complete:
                 # 짧은 텍스트만, 그리고 직전 라벨이 아직 괄호로 안 닫혔을 때만 이어붙인다.
                 # 이미 "(C-Re)"처럼 닫힌 라벨 뒤에 오는 "지급시기" 같은 다음 표 제목이
                 # 잘못 붙는 걸 막는다.
-                data_rows[-1][class_col] = (data_rows[-1][class_col] + label).strip()
+                data_rows[-1][class_col] = (data_rows[-1][class_col] + row_label).strip()
                 blank_streak += 1
-                if blank_streak > 2:
+                if blank_streak > 4:
+                    break
+            elif row_label and len(row_label) <= 20:
+                # 라벨은 있지만(직전 라벨이 이미 닫혔거나 아직 데이터가 없어서) 이어붙일
+                # 곳이 없는 짧은 잡음 줄 — "투자비용" 같은 절 제목이 표 중간에 한 줄
+                # 끼어드는 경우다. 예전엔 여기서 표가 끝난 것으로 보고 break해서 뒤에
+                # 남은 진짜 데이터 행(예: 온라인 클래스들)이 통째로 사라졌다.
+                # 건너뛰고 계속 스캔한다.
+                blank_streak += 1
+                if blank_streak > 4:
                     break
             else:
+                # 라벨도 없거나(완전 공백 행) 각주처럼 긴 문단이 시작된 것 — 진짜 표 끝.
                 break
             k += 1
 
@@ -202,13 +258,25 @@ def looks_like_class_label(label: str) -> bool:
     return bool(CLASS_LABEL_RE.search(re.sub(r"\s+", "", label)))
 
 
+CLASS_LABEL_PREFIX_RE = re.compile(r"^([A-Za-z0-9\-]{1,8})[(（]")
+# "A(수수료선취-오프라인)"처럼 코드가 앞에, 설명이 괄호 안에 있는 라벨도 있다
+# (실측: 신영밸류고배당·신영마라톤). 끝괄호 정규식은 이 경우 설명 문구를
+# 통째로 코드로 잘못 잡는다("수수료선취-오프라인"이 class_code가 됨).
+
+
 def parse_class_code(label: str) -> str | None:
     clean = re.sub(r"\s+", "", label)
     m = CLASS_LABEL_NESTED_RE.search(clean)
     if m:
         return m.group(1)
     m = CLASS_LABEL_RE.search(clean)
-    return m.group(1) if m else None
+    if m and not re.search(r"[가-힣]{2,}", m.group(1)):
+        # 잡힌 문자열이 진짜 코드처럼 짧고 한글 설명이 아닐 때만 신뢰한다.
+        return m.group(1)
+    m2 = CLASS_LABEL_PREFIX_RE.search(clean)
+    if m2:
+        return m2.group(1)
+    return None
 
 
 def parse_num(s: str) -> float | None:
