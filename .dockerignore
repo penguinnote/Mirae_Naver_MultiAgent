@@ -1,0 +1,50 @@
+# .gitignore와 같은 원칙 — 원본 문서·비공개 정답·실행결과·크리덴셜을
+# 이미지에 절대 넣지 않는다. Dockerfile은 dataset/의 4개 산출물만
+# 명시적으로 COPY하므로 dataset/ 전체를 막고 그 COPY 줄만 예외로 둔다.
+
+.git/
+.gitignore
+_to_delete/
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.DS_Store
+*.bak_*
+*.log
+*.zip
+
+# 크리덴셜
+.env
+*.pem
+*.key
+
+# 원본 문서 (저작권·용량)
+0.*/
+*투자설명서*/
+*docs_renamed*/
+ncp_data_test/
+
+# 비공개 정답·평가 실행 결과·리포트
+gold_private_*.json
+gold_holdout_*.json
+killing_camp_*.json
+raw_*.json
+scored_*.json
+questions_only_*.json
+공유_*.md
+분석_*.md
+base.json
+round*.json
+v1_run*.json
+v2_run*.json
+evalset_*.json
+
+# dataset/ 은 통째로 막고 Dockerfile에서 필요한 4개만 다시 연다
+dataset/*
+!dataset/chroma
+!dataset/chroma/**
+!dataset/bm25.pkl
+!dataset/chunks_final.jsonl
+!dataset/fund_fees.sqlite
