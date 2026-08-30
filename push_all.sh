@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+#
+# 원격 3곳에 올린다.  사용법:  bash push_all.sh
+#
+#   origin/main         penguinnote/Mirae_Naver_MultiAgent   (개인 저장소)
+#   pen/penguinnote     miraeasset-.../pen-056               (작업 브랜치)
+#   pen/main            miraeasset-.../pen-056               (심사자가 보는 브랜치)
+#
+# 이 폴더의 .git은 잠금 파일을 지울 수 없다(mv만 된다). 그래서 git을 부르기
+# 전마다 잠금을 _to_delete/로 치운다. 이게 없으면 "unable to unlink"로 죽는다.
+#
+# backup-20260828 브랜치는 **어떤 경우에도 올리지 않는다.**
+# 그 브랜치에는 이력에서 걷어낸 Claude 트레일러가 그대로 남아 있다.
+
+set -uo pipefail
+cd "$(dirname "$0")" || exit 1
+
+unlock() { mkdir -p _to_delete; mv .git/*.lock _to_delete/ 2>/dev/null; true; }
+die() { printf '\n중단: %s\n' "$1" >&2; exit 1; }
+
+unlock
+BR=$(git rev-parse --abbrev-ref HEAD)
+[ "$BR" = "main" ] || die "현재 브랜치가 main이 아니라 '$BR' 입니다."
+
+echo "── 사전 점검 ─────────────────────────────────────────────"
+
+unlock
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+  git status --short --untracked-files=no
+  die "커밋 안 된 변경이 있습니다. 먼저 커밋하거나 되돌리세요."
+fi
+echo "  ✅ 작업 트리 깨끗함"
+
+unlock
+N=$(git log origin/main..HEAD --format='%H%n%B' \
+      | grep -icE 'co-authored-by: *claude|claude-session|claude\.ai/code')
+[ "$N" = "0" ] || die "푸시 대상 커밋에 Claude 트레일러가 ${N}건 있습니다."
+echo "  ✅ 커밋 메시지에 Claude 흔적 없음"
+
+unlock
+LEAK=$(git ls-files \
+        | grep -E '^(gold_holdout_|gold_private_|killing_camp_|raw_|scored_|공유_|분석_|questions_only_)')
+[ -z "$LEAK" ] || { printf '%s\n' "$LEAK"; die "정답지·실행결과가 추적되고 있습니다."; }
+echo "  ✅ 정답지·실행결과 추적 안 됨"
+
+echo
+echo "── 올라갈 커밋 ───────────────────────────────────────────"
+unlock
+git log --oneline origin/main..HEAD
+echo
+printf '  origin/main      %s → %s\n' "$(git rev-parse --short origin/main)" "$(git rev-parse --short HEAD)"
+printf '  pen/penguinnote  %s → %s\n' "$(git rev-parse --short pen/penguinnote)" "$(git rev-parse --short HEAD)"
+printf '  pen/main         %s → %s  (덮어씀: 원격에 Initial commit만 있음)\n' \
+       "$(git rev-parse --short pen/main)" "$(git rev-parse --short HEAD)"
+echo
+printf '진행할까요? [y/N] '
+read -r yn
+case "$yn" in [yY]*) ;; *) echo "취소했습니다."; exit 0 ;; esac
+
+echo
+echo "── 푸시 ──────────────────────────────────────────────────"
+
+unlock
+echo "[1/3] origin main"
+git push origin main || die "origin main 실패"
+
+unlock
+echo "[2/3] pen penguinnote"
+git push pen main:penguinnote || die "pen penguinnote 실패"
+
+# pen/main에는 조직이 만든 'Initial commit'(README 2줄)만 있고 우리 이력과
+# 조상이 겹치지 않는다. 그래서 일반 푸시로는 안 올라간다.
+# --force-with-lease는 방금 fetch한 상태와 원격이 같을 때만 덮어쓴다.
+# 팀원이 그 사이에 뭔가 올렸다면 실패하면서 알려준다. 맹목적 --force와 다르다.
+unlock
+echo "[3/3] pen main  (force-with-lease)"
+git push --force-with-lease=main:"$(git rev-parse pen/main)" pen main:main \
+  || die "pen main 실패 — 원격이 바뀌었을 수 있습니다. git fetch pen 후 다시 확인하세요."
+
+unlock
+echo
+echo "── 결과 ──────────────────────────────────────────────────"
+git fetch --quiet origin pen 2>/dev/null
+unlock
+for r in origin/main pen/main pen/penguinnote; do
+  printf '  %-18s %s\n' "$r" "$(git rev-parse --short "$r" 2>/dev/null)"
+done
+echo "  HEAD               $(git rev-parse --short HEAD)"
+echo
+echo "✅ 완료"
