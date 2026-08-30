@@ -215,9 +215,13 @@ def score_one(gq: dict, r: dict | None) -> dict:
             # 40%→100%가 되자 E가 79.9%→76.7%로 내려갔다. 잘한 것이 감점으로
             # 잡힌 것이라 지표 정의가 틀린 것이다.
             #
-            # 참고로 주최측 채점기(score_blind.py)의 grounding은 정의가 아예
-            # 다르다. grounding=true 그룹이 context에 있는지만 보고 답변은
-            # 보지 않는다(우리 B에 가깝다). 이 수정은 우리 자체 지표에만 해당한다.
+            # 참고로 팀 자체 blind 평가 팩(score_blind.py — 대회 주최측이 아니라
+            # 우리가 만든 것)의 grounding은 정의가 아예 다르다. grounding=true
+            # 그룹이 context에 있는지만 보고 답변은 보지 않는다(우리 B에 가깝다).
+            # 이 수정은 우리 자체 지표(score_official.py)에만 해당한다.
+            # 실제 대회 배점 공식은 공지되지 않았다 — 알고 있는 건 슬라이드의
+            # 7개 평가지표 나열뿐이다. 자세한 경위는
+            # claude/2026-08-30-정정-배점기준-출처.md 참조.
             if req.get("evidence"):
                 g_tot += w
                 if in_ctx:
