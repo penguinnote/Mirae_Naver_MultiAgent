@@ -122,5 +122,30 @@ for q, want, avoid in CASES:
         f"{q[:34]}…  {'누락 ' + str(miss) if miss else ''}"
         f"{'  엉뚱함 ' + str(bad) if bad else ''}")
 
+print("\n⑤ 한계 고지 — 정해진 문장이 코드로 박히는가")
+# 프롬프트로 세 번 밀었는데도 어미가 흔들려(조회해 드릴 수 없 / 제공할 수 없)
+# 코드로 옮긴 자리다. 여기가 조용히 망가지면 정보한계대응이 다시 40%로 내려간다.
+# 정답지 문항이 아니라 같은 유형의 합성 질문을 쓴다.
+FIRE = [
+    ("제 IRP 계좌 비밀번호를 초기화해서 임시 비밀번호를 발급해 주세요.",
+     ["처리해 드릴 수 없", "권한이 없"], ["영업점", "고객센터"]),
+    ("저희 회사 DB 적립금 총액이랑 수익률을 실시간으로 조회해서 알려주세요.",
+     ["조회할 수 없"], ["인사", "부서"]),
+]
+for q, want_notice, want_channel in FIRE:
+    out, what = agent._apply_unable_notice("네, 알려드리겠습니다.", q)
+    chk(any(w in out for w in want_notice) and any(w in out for w in want_channel),
+        f"{q[:30]}…  고지+창구가 붙음")
+
+# 오탐이 나면 멀쩡한 답변에 엉뚱한 고지가 붙는다. 일반 질문에는 안 걸려야 한다.
+QUIET = [
+    "DC형 퇴직연금 계좌에서 위험자산에는 최대 몇 %까지 투자할 수 있나요?",
+    "연금저축과 IRP를 합한 세액공제 한도는 얼마인가요?",
+    "퇴직연금 디폴트옵션은 만기 후 몇 주가 지나면 통지되나요?",
+]
+for q in QUIET:
+    _out, what = agent._apply_unable_notice("본문입니다.", q)
+    chk(not what, f"오탐 없음: {q[:34]}…")
+
 print("\n" + ("✅ 전부 통과" if ok_all else "❌ 실패 있음"))
 sys.exit(0 if ok_all else 1)

@@ -578,6 +578,104 @@ def _refuse_injection(question: str) -> str:
     return "\n".join(parts)
 
 
+# ── 못 하는 일의 고지 — 프롬프트가 아니라 코드로 ──────────────────
+#
+# 인젝션·개인정보 거절(_REFUSE_*)이 4회 실행에서 전부 만점인 이유는 문장을
+# 코드가 조립하기 때문이다. 반대로 "조회할 수 없습니다"는 프롬프트에 세 번
+# 못 박았는데도 실행마다 "조회해 드릴 수 없습니다", "제공할 수 없습니다"로
+# 흔들렸다. 온도가 0.2여도 어미까지 고정되지는 않는다.
+#
+# 여기서 하는 일은 **답변을 대체하는 것이 아니다.** 고지 한 줄을 앞에 박고,
+# 갈 곳이 빠졌으면 뒤에 한 줄 더한다. 나머지 설명은 그대로 모델의 몫이다.
+# 오탐이 나면 멀쩡한 답변에 엉뚱한 고지가 붙으므로, 판정은 **요청 동사와
+# 대상이 함께 있을 때만** 참이 되도록 좁게 잡는다.
+
+# "해 주세요/해 줄 수 있나요/처리해" — 요청하는 말투
+_ASK_VERB_RE = re.compile(
+    r"(해\s?주(세요|실|시)|해\s?줄\s?수|해\s?줘|처리해|발급해|알려\s?주(세요|실|시)|"
+    r"조회해\s?(서|주)|부탁|신청해\s?주)")
+
+# 이 에이전트가 대신 실행할 수 없는 **거래**
+_ACTION_TARGET_RE = re.compile(
+    r"(비밀번호.{0,6}(초기화|재설정|발급)|임시\s?비밀번호|해지|중도인출\s?신청|"
+    r"이체(해|를|해서)|출금해|매수해|매도해|계좌\s?개설)")
+
+# 이 에이전트가 볼 수 없는 **남의 데이터**
+_LOOKUP_TARGET_RE = re.compile(
+    r"(제|저희|내|우리|본인)\s?(회사\s?)?[^.\n]{0,12}"
+    r"(계좌|잔액|적립금|수익률|가입\s?(내역|정보)|전화번호|연락처|담당\s?부서)")
+_REALTIME_RE = re.compile(r"(실시간으로|지금\s?바로|당장|현재\s?잔고)")
+
+_UNABLE_ACTION = (
+    "저는 계좌 비밀번호 재설정이나 임시 비밀번호 발급, 계좌 해지 같은 "
+    "금융 거래를 직접 처리해 드릴 수 없습니다. 그럴 권한이 없습니다.")
+_UNABLE_LOOKUP = (
+    "저는 개인 계좌 정보나 특정 회사의 내부 자료를 실시간으로 조회할 수 "
+    "없습니다.")
+_CHANNEL_PERSONAL = (
+    "본인 확인이 필요한 업무는 미래에셋증권 MTS/HTS 앱의 인증센터, "
+    "가까운 영업점 방문, 또는 고객센터를 통해 진행해 주시기 바랍니다.")
+_CHANNEL_COMPANY = (
+    "회사 인사·노무 부서 또는 퇴직연금사업자의 기업 전용 관리 시스템에서 "
+    "확인하실 수 있습니다.")
+
+# 이미 말했는지 보는 표지 — **정해진 형태로** 들어 있을 때만 참으로 친다.
+# 어미가 다른 변형("조회해 드릴 수 없습니다")까지 인정하면 이 코드가 존재할
+# 이유가 없어진다. 흔들리는 어미를 고정하려고 옮겨온 것이기 때문이다.
+# 실측(H3-19): 모델은 "저희 회사는 … 조회해 드릴 수 없습니다"라고 썼다.
+# 어미도 어긋났지만 **주어까지 틀렸다** — 에이전트는 사용자의 회사가 아니다.
+_SAID_ACTION = ("처리해 드릴 수 없", "처리해드릴 수 없", "권한이 없", "발급할 수 없")
+_SAID_LOOKUP = ("조회할 수 없", "확인해 드리기 어렵", "확인이 어렵")
+_SAID_CHANNEL = ("영업점", "고객센터", "MTS", "HTS")
+_SAID_COMPANY = ("인사", "부서", "관리 시스템")
+
+# 고지를 앞에 박으면 모델이 쓴 "아닙니다."가 뒤에 남아 어색해진다.
+# 고지 문장이 이미 부정을 담고 있으므로 맨 앞의 맨몸 부정 줄은 걷어낸다.
+_BARE_NO_RE = re.compile(r"^\s*(\[답변\]\s*)?(아닙니다|아니요|아니오|아뇨)[.!]?\s*")
+
+# 고지를 박은 다음에도 모델이 쓴 같은 뜻의 문장이 남으면 두 번 말하는 꼴이 된다.
+# 게다가 그 문장은 주어가 틀리기도 한다 — 실측(H3-19)에서 모델은 "저희 회사는
+# … 조회해 드릴 수 없습니다"라고 썼는데, 이 에이전트는 사용자의 회사가 아니다.
+# 맨 앞 한 문장만, 같은 뜻일 때만 걷어낸다.
+_ECHO_RE = re.compile(
+    r"^[^.\n]{0,160}?(조회|확인|제공|알려|안내|발급|처리)[^.\n]{0,20}?"
+    r"(드릴 수 없|드리기 어렵|할 수 없|이 어렵습니다|불가능합니다)[^.\n]*\.\s*")
+
+
+def _unable_notice(question: str) -> tuple:
+    """(고지 문장, 안내 창구 문장) — 해당 없으면 (None, None)."""
+    q = question or ""
+    asked = bool(_ASK_VERB_RE.search(q))
+    if not asked:
+        return (None, None)
+    if _ACTION_TARGET_RE.search(q):
+        return (_UNABLE_ACTION, _CHANNEL_PERSONAL)
+    if _LOOKUP_TARGET_RE.search(q) or (_REALTIME_RE.search(q) and "조회" in q):
+        company = bool(re.search(r"(저희|우리)\s?회사", q))
+        return (_UNABLE_LOOKUP,
+                _CHANNEL_COMPANY if company else _CHANNEL_PERSONAL)
+    return (None, None)
+
+
+def _apply_unable_notice(answer: str, question: str) -> tuple:
+    """고지가 빠졌으면 앞에, 갈 곳이 빠졌으면 뒤에 붙인다."""
+    notice, channel = _unable_notice(question)
+    if not notice:
+        return (answer, "")
+    said = _SAID_ACTION if notice is _UNABLE_ACTION else _SAID_LOOKUP
+    todo = []
+    if not any(m in answer for m in said):
+        body = _BARE_NO_RE.sub("", answer, count=1)
+        body = _ECHO_RE.sub("", body, count=1).lstrip()
+        answer = notice + "\n\n" + body
+        todo.append("고지")
+    want = _SAID_COMPANY if channel is _CHANNEL_COMPANY else _SAID_CHANNEL
+    if not any(m in answer for m in want):
+        answer = answer.rstrip() + "\n\n" + channel
+        todo.append("안내 창구")
+    return (answer, "+".join(todo))
+
+
 def safety_check(state: dict) -> dict:
     q = state["question"]
     if _looks_like_pii(q):
@@ -2767,13 +2865,27 @@ def to_response(state: dict) -> dict:
     # 출처 표기를 걷어낸 **뒤에** 붙여야 한다. 제거기가 '문서명 N쪽' 꼴을
     # 지우도록 되어 있어서, 먼저 붙이면 방금 붙인 줄을 도로 지운다.
     _ans = str(state.get("answer") or "")
+
+    # 못 하는 일의 고지는 코드가 박는다(위 _apply_unable_notice 참조).
+    # 출처 제거가 끝난 **뒤**, 근거 줄을 붙이기 **전**이어야 한다.
+    # 근거 줄은 **모델이 쓴 본문** 기준으로 고른다. 아래에서 붙이는 고지는
+    # 코드가 만든 정형문이라, 그 낱말이 근거 선별에 끼어들면 안 된다.
+    _ans_model = _ans
     if _ans and not state.get("_blocked"):
-        _line = _source_line(state.get("evidence") or [], _ans,
+        _ans, _what = _apply_unable_notice(_ans, str(state.get("question") or ""))
+        if _what:
+            state["answer"] = _ans
+            state.setdefault("trace", []).append(
+                f"한계 고지: {_what}를 코드로 보강(생성에 맡기면 어미가 흔들린다)")
+
+    if _ans and not state.get("_blocked"):
+        _line = _source_line(state.get("evidence") or [], _ans_model,
                              str(state.get("question") or ""))
         if _line and "※ 근거:" not in _ans:
             _ans += _line
             state.setdefault("trace", []).append(
                 "출처 정리: 답변 끝에 근거 문서 목록을 붙임")
+    state["answer"] = _ans
 
     return {
         "question_id": str(state.get("question_id") or ""),
