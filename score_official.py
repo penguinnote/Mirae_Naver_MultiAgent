@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Mirae Integrated Blind v1 — 공식 정답지 기반 채점기.
+"""Mirae Integrated Blind v1 — 팀 자체 정답지 기반 채점기.
 
-FAIRNESS_AND_SCORING.md 에 정의된 규칙을 그대로 구현한다.
+FAIRNESS_AND_SCORING.md(팀 자체 제작, 대회 주최측 공지 아님)에 정의된
+규칙을 그대로 구현한다. 실제 대회 배점 공식은 공지되지 않았다 —
+자세한 경위는 claude/2026-08-30-정정-배점기준-출처.md 참조.
 
   자동 상태 (WRONG는 자동으로 확정하지 않는다 — 정책 명시 사항):
     AUTO_CORRECT          등록된 핵심 사실을 모두 확인
