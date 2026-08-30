@@ -194,7 +194,7 @@ def score_one(gq: dict, r: dict | None) -> dict:
     missing, matched = [], []
     # ── B. 검색 핵심 커버리지 (evidence=true 항목이 context에 있는지) ──
     e_tot = e_hit = 0.0
-    # ── E. 근거 정합성 (답변에 쓴 사실이 context에도 있는지) ──
+    # ── E. 근거 정합성 (답변에 쓴 **문서 기반 항목**이 context에도 있는지) ──
     g_tot = g_hit = 0.0
 
     for req in gq.get("required", []):
@@ -205,9 +205,23 @@ def score_one(gq: dict, r: dict | None) -> dict:
         if in_ans:
             hit += w
             matched.append(req)
-            g_tot += w
-            if in_ctx:
-                g_hit += w
+            # E는 **문서에서 왔어야 할 항목**만 센다.
+            #
+            # evidence=False 항목은 정답지가 "이건 자료에서 인용할 말이 아니라
+            # 에이전트가 스스로 해야 할 말"이라고 표시해 둔 것이다 — 거절,
+            # 한계 고지, 안내 창구. 그런 문장이 retrieved_context에 있을 리가
+            # 없다. 그런데 이걸 E에 넣으면, **한계를 제대로 고지할수록 E가
+            # 떨어진다.** 실측(2026-08-30): 한계 고지를 코드로 고정해 H3-19·20이
+            # 40%→100%가 되자 E가 79.9%→76.7%로 내려갔다. 잘한 것이 감점으로
+            # 잡힌 것이라 지표 정의가 틀린 것이다.
+            #
+            # 참고로 주최측 채점기(score_blind.py)의 grounding은 정의가 아예
+            # 다르다. grounding=true 그룹이 context에 있는지만 보고 답변은
+            # 보지 않는다(우리 B에 가깝다). 이 수정은 우리 자체 지표에만 해당한다.
+            if req.get("evidence"):
+                g_tot += w
+                if in_ctx:
+                    g_hit += w
         else:
             missing.append(req)
         if req.get("evidence"):
