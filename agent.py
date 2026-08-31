@@ -1620,20 +1620,12 @@ def _split_top_level(text: str, kw: str) -> list:
     return [p.strip() for p in parts if p.strip()]
 
 
-def _split_or_groups(sql: str):
-    """WHERE 절을 펀드별 조건으로 나눈다. 못 나누면 None.
+def _split_where_suffix(sql: str):
+    """WHERE 절을 (prefix, where본문, ORDER BY/LIMIT 등 꼬리)로 나눈다.
 
-    두 형태를 받는다 — 실측에서 HCX가 둘 다 만든다.
-      ① WHERE (A조건) OR (B조건)          → 그대로 둘로
-      ② WHERE (A OR B) AND 공통조건        → 공통조건을 각 항에 분배
-    OR는 SQL에서 우선순위가 가장 낮으므로 ①의 결과는 두 조건을 따로 건
-    결과의 합집합과 정확히 같고, ②도 분배법칙으로 같다 — 이 분해는 의미를
-    바꾸지 않는다. 다만 집계(MIN/MAX/COUNT…)나 GROUP BY가 끼면 합집합이
-    성립하지 않으므로 손대지 않는다. 조건마다 fund_name이 있을 때만(=펀드별
-    비교 형태일 때만) 나눈다.
+    _split_or_groups와 _has_multi_literal_in이 함께 쓰는 공통 절개 로직.
+    WHERE가 없으면 None.
     """
-    if _AGG_RE.search(sql) or re.search(r"\bGROUP\s+BY\b", sql, re.I):
-        return None
     m = _WHERE_KW_RE.search(sql)
     if not m:
         return None
@@ -1651,7 +1643,27 @@ def _split_or_groups(sql: str):
             cut = mm.start()
             break
     where, suffix = body[:cut], body[cut:]
-    prefix = sql[:m.end()]
+    return sql[:m.end()], where, suffix
+
+
+def _split_or_groups(sql: str):
+    """WHERE 절을 펀드별 조건으로 나눈다. 못 나누면 None.
+
+    두 형태를 받는다 — 실측에서 HCX가 둘 다 만든다.
+      ① WHERE (A조건) OR (B조건)          → 그대로 둘로
+      ② WHERE (A OR B) AND 공통조건        → 공통조건을 각 항에 분배
+    OR는 SQL에서 우선순위가 가장 낮으므로 ①의 결과는 두 조건을 따로 건
+    결과의 합집합과 정확히 같고, ②도 분배법칙으로 같다 — 이 분해는 의미를
+    바꾸지 않는다. 다만 집계(MIN/MAX/COUNT…)나 GROUP BY가 끼면 합집합이
+    성립하지 않으므로 손대지 않는다. 조건마다 fund_name이 있을 때만(=펀드별
+    비교 형태일 때만) 나눈다.
+    """
+    if _AGG_RE.search(sql) or re.search(r"\bGROUP\s+BY\b", sql, re.I):
+        return None
+    parts = _split_where_suffix(sql)
+    if not parts:
+        return None
+    prefix, where, suffix = parts
 
     # ① 최상위 OR
     ors = _split_top_level(where, "OR")
@@ -1670,6 +1682,27 @@ def _split_or_groups(sql: str):
                         for p in inner], suffix
 
     return None
+
+
+def _has_multi_literal_in(sql: str) -> bool:
+    """fund_name IN (...) 또는 class_code IN (...)에 값이 2개 이상 있으면
+    같은 펀드의 여러 클래스(또는 여러 펀드)를 한 번에 비교하는 쿼리로 본다.
+
+    실측 근거(V4S-H09, 2026-08-31): "하나IT코리아 A-E와 C-E 중 총보수가
+    낮은 쪽" 질문에서 HCX는 OR이 아니라
+    `class_code IN ('AE','CE') ORDER BY fee_total ASC LIMIT 1` 형태로 SQL을
+    짰다. _split_or_groups는 OR 구조만 보므로 이 형태는 못 잡고, 그러면
+    LIMIT 1이 두 클래스 중 하나(C-E)를 통째로 지워버린다 — _split_or_groups가
+    다루는 것과 뿌리가 같은 문제이지만 SQL의 겉모양이 다르다. 이 정규식은
+    class/channel 정규화 **이전**의 원본 SQL에 대해서만 쓴다 — 정규화가
+    IN(...) 안의 표기(예: 'A-E'→'AE')는 바꾸되 리터럴 개수와 IN 구조 자체는
+    그대로 두므로, 결과는 정규화 이후 SQL에도 그대로 적용된다.
+    """
+    for rx in (_FUND_IN_RE, _CLASS_IN_RE):
+        m = rx.search(sql)
+        if m and len(re.findall(r"'([^']*)'", m.group(1))) >= 2:
+            return True
+    return False
 
 
 def _drop_top_level_limit(suffix: str) -> str:
@@ -1770,6 +1803,21 @@ def _fill_or_groups(sql: str, rows: list, state: dict) -> tuple:
     return merged[:50], missing
 
 
+def _strip_sql_comments(sql: str) -> str:
+    """SQL 앞뒤에 낀 줄 주석(-- …)·블록 주석(/* … */)을 지운다.
+
+    실측 근거(V4S-H10, 2026-08-31): HCX가 코드블록 맨 앞에
+    "-- 연금계좌 인출 재원 순서 정보" 같은 설명 줄을 붙였다.
+    `_validate_sql`은 "SELECT로 시작하는가"만 보므로 이 한 줄 때문에
+    멀쩡한 SQL이 통째로 거부됐고, 재시도도 HCX가 같은 습관을 반복해 똑같이
+    실패해 fee_sql 전체가 검색 폴백으로 넘어갔다(그 결과 답변이 사전지식으로
+    숫자를 지어냈다 — SQL 없이는 sql_empty 경고조차 못 붙는다).
+    """
+    sql = re.sub(r"/\*.*?\*/", "", sql, flags=re.S)
+    lines = [ln for ln in sql.split("\n") if not ln.strip().startswith("--")]
+    return "\n".join(lines).strip()
+
+
 def _extract_sql(text: str) -> str:
     """HCX 응답에서 SQL 쿼리를 추출한다.
 
@@ -1780,15 +1828,15 @@ def _extract_sql(text: str) -> str:
     # ① 마크다운 코드블록 안의 SQL
     m = re.search(r"```(?:sql)?\s*\n(.+?)```", text, re.DOTALL | re.IGNORECASE)
     if m:
-        return m.group(1).strip()
+        return _strip_sql_comments(m.group(1).strip())
 
     # ② SELECT로 시작하는 부분 추출
     m = re.search(r"(SELECT\s+.+)", text, re.DOTALL | re.IGNORECASE)
     if m:
-        return m.group(1).strip()
+        return _strip_sql_comments(m.group(1).strip())
 
     # ③ 그대로 반환 (validation에서 걸러짐)
-    return text
+    return _strip_sql_comments(text)
 
 
 _CLASS_EQ_RE = re.compile(r"class_code\s*=\s*'([^']*)'", re.I)
@@ -1944,20 +1992,26 @@ def fee_sql(state: dict) -> dict:
                 state["trace"].append("fee_sql: channel 값을 DB 실제 값으로 정규화")
                 sql = ch
 
-            # 다중 펀드 비교 쿼리에 LIMIT이 붙어 있으면 지운다(위 설명 참조).
-            # 실행 전에 처리해야 한다 — 실행 후에 손보면 이미 잘려나간 행은
-            # 되살릴 수 없다.
-            multi = _split_or_groups(sql)
-            if multi:
-                m_prefix, m_conds, m_suffix = multi
-                m_new_suffix = _drop_top_level_limit(m_suffix)
-                if m_new_suffix != m_suffix:
-                    sql = _validate_sql(
-                        f"{m_prefix} "
-                        f"{' OR '.join(f'({c})' for c in m_conds)} "
-                        f"{m_new_suffix}".strip())
-                    state["trace"].append(
-                        "fee_sql: 다중 펀드 비교 쿼리에서 LIMIT 제거 → 전체 대상 조회")
+            # 비교 대상이 여럿인 쿼리에 LIMIT이 붙어 있으면 지운다(위 설명
+            # 참조). 실행 전에 처리해야 한다 — 실행 후에 손보면 이미
+            # 잘려나간 행은 되살릴 수 없다. 두 형태 다 본다 —
+            #   ① 펀드별 OR (_split_or_groups)
+            #   ② 한 펀드 안의 여러 클래스를 IN(...)으로 묶은 형태
+            #      (_has_multi_literal_in) — V4S-H09가 이 형태였다.
+            is_multi_fund = _split_or_groups(sql) is not None
+            is_multi_in = _has_multi_literal_in(sql_plain)
+            if is_multi_fund or is_multi_in:
+                m_parts = _split_where_suffix(sql)
+                if m_parts:
+                    m_prefix, m_where, m_suffix = m_parts
+                    m_new_suffix = _drop_top_level_limit(m_suffix)
+                    if m_new_suffix != m_suffix:
+                        sql = _validate_sql(
+                            f"{m_prefix}{m_where}{m_new_suffix}".strip())
+                        reason = "다중 펀드" if is_multi_fund else "다중 클래스(IN)"
+                        state["trace"].append(
+                            f"fee_sql: {reason} 비교 쿼리에서 LIMIT 제거 → "
+                            f"전체 대상 조회")
 
             conn = sqlite3.connect(FUND_FEES_DB)
             conn.row_factory = sqlite3.Row
