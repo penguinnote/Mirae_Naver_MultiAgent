@@ -1470,6 +1470,25 @@ CREATE TABLE fund_fees (
      개별 행이 필요한 질문입니다. 집계는 "평균", "몇 개" 를 물을 때만
      쓰십시오.
 
+  ③ 질문에 제도·세제 등 **이 표에 없는 내용**(세율, 소득세, 한도, 인출
+     순서 등)이 앞에 섞여 있어도, 뒤에 펀드명·클래스가 나오면 그 펀드
+     비교 SQL을 반드시 만드십시오. 제도 용어는 class_label이나 다른
+     컬럼 값으로 존재하지 않으니 검색하지 마십시오 — 있지도 않은 문자열을
+     찾다가 펀드 비교 자체를 놓치게 됩니다.
+
+        틀림 ← 실제로 오답을 만든 쿼리(질문: "…연금소득세율을 알려주고,
+        하나파워e단기채 A-E와 미래에셋차세대Fun인덱스 Ae 중 총보수가
+        낮은 것도 골라주세요")
+          SELECT DISTINCT class_label FROM fund_fees
+          WHERE class_label LIKE '%연금소득세율%'
+          해석: '연금소득세율'은 이 표에 없는 개념이라 늘 0행이고,
+                뒤에 나온 두 펀드 비교는 통째로 버려졌다.
+
+        올바름 — 세율 질문은 무시하고 펀드 비교만 만든다
+          SELECT fund_name, class_code, fee_total, page FROM fund_fees
+          WHERE (fund_name LIKE '%파워e단기채%'   AND class_code = 'A-E')
+             OR (fund_name LIKE '%차세대Fun인덱스%' AND class_code = 'Ae')
+
 ■ 규칙:
   1. SELECT 문 하나만 출력하십시오 (설명·주석 없이 SQL만)
   2. ORDER BY로 정렬하십시오 (비교·순위 질문일 때)
