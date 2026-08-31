@@ -1582,6 +1582,178 @@ def _relax_fund_name(sql: str) -> str | None:
     return out if changed else None
 
 
+# ── 여러 펀드를 OR로 묶은 비교 질문: 빠진 쪽만 따로 완화한다 ──────────
+#
+# 실측 근거(v4_stress H02·P09·H03·H06·H09·H10, 2026-08-30):
+# "A펀드와 B펀드의 총보수를 비교해줘" 류에서 HCX는
+# `WHERE (A조건) OR (B조건)` 형태의 SQL을 만든다. 한쪽 LIKE만 걸리고
+# 다른 쪽이 0행이면 **전체 rows는 비어 있지 않으므로** 위의 '0행이면
+# 완화 재조회'가 발동하지 않는다. 즉 한쪽이 조용히 사라진다.
+# 더 나쁜 건 그다음이다 — compose()의 "DB에 행이 없었다" 경고도 전체가
+# 0행일 때만 붙기 때문에, 모델은 반쪽짜리 표를 아무 경고 없이 받아
+# 없는 숫자를 지어낸다(H06·H10이 실제로 그랬다. 정직하게 "확인되지
+# 않는다"고 답한 H02·P09보다 훨씬 나쁘다).
+#
+# 그래서 조건별로 따로 실행해 0행인 쪽에만 완화를 적용하고, 끝내 못 찾은
+# 조건은 이름을 뽑아 compose까지 전달한다.
+_AGG_RE = re.compile(r"\b(?:MIN|MAX|AVG|SUM|COUNT|GROUP_CONCAT)\s*\(", re.I)
+_WHERE_KW_RE = re.compile(r"\bWHERE\b", re.I)
+_TAIL_KW_RE = re.compile(
+    r"\(|\)|\bORDER\s+BY\b|\bGROUP\s+BY\b|\bLIMIT\b|\bHAVING\b", re.I)
+_BOOL_KW_RE = re.compile(r"\(|\)|\bOR\b", re.I)
+
+
+def _split_top_level(text: str, kw: str) -> list:
+    """괄호 밖에 있는 kw(OR/AND)를 기준으로 조건 문자열을 나눈다."""
+    rx = re.compile(r"\(|\)|\b" + kw + r"\b", re.I)
+    parts, depth, last = [], 0, 0
+    for mm in rx.finditer(text):
+        t = mm.group(0)
+        if t == "(":
+            depth += 1
+        elif t == ")":
+            depth -= 1
+        elif depth == 0:
+            parts.append(text[last:mm.start()])
+            last = mm.end()
+    parts.append(text[last:])
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _split_or_groups(sql: str):
+    """WHERE 절을 펀드별 조건으로 나눈다. 못 나누면 None.
+
+    두 형태를 받는다 — 실측에서 HCX가 둘 다 만든다.
+      ① WHERE (A조건) OR (B조건)          → 그대로 둘로
+      ② WHERE (A OR B) AND 공통조건        → 공통조건을 각 항에 분배
+    OR는 SQL에서 우선순위가 가장 낮으므로 ①의 결과는 두 조건을 따로 건
+    결과의 합집합과 정확히 같고, ②도 분배법칙으로 같다 — 이 분해는 의미를
+    바꾸지 않는다. 다만 집계(MIN/MAX/COUNT…)나 GROUP BY가 끼면 합집합이
+    성립하지 않으므로 손대지 않는다. 조건마다 fund_name이 있을 때만(=펀드별
+    비교 형태일 때만) 나눈다.
+    """
+    if _AGG_RE.search(sql) or re.search(r"\bGROUP\s+BY\b", sql, re.I):
+        return None
+    m = _WHERE_KW_RE.search(sql)
+    if not m:
+        return None
+    body = sql[m.end():]
+
+    # WHERE 절의 끝 = 괄호 밖의 ORDER BY / LIMIT / HAVING
+    depth, cut = 0, len(body)
+    for mm in _TAIL_KW_RE.finditer(body):
+        t = mm.group(0)
+        if t == "(":
+            depth += 1
+        elif t == ")":
+            depth -= 1
+        elif depth == 0:
+            cut = mm.start()
+            break
+    where, suffix = body[:cut], body[cut:]
+    prefix = sql[:m.end()]
+
+    # ① 최상위 OR
+    ors = _split_top_level(where, "OR")
+    if len(ors) >= 2 and all("fund_name" in p.lower() for p in ors):
+        return prefix, ors, suffix
+
+    # ② (A OR B) AND 공통조건 — 공통조건을 각 항에 분배한다
+    ands = _split_top_level(where, "AND")
+    for i, term in enumerate(ands):
+        if not (term.startswith("(") and term.endswith(")")):
+            continue
+        inner = _split_top_level(term[1:-1], "OR")
+        if len(inner) < 2 or not all("fund_name" in p.lower() for p in inner):
+            continue
+        return prefix, [" AND ".join(ands[:i] + ["(" + p + ")"] + ands[i + 1:])
+                        for p in inner], suffix
+
+    return None
+
+
+def _run_sql_rows(sql: str) -> list:
+    """검증을 거쳐 SQL을 실행하고 dict 행 목록을 돌려준다."""
+    import sqlite3
+
+    conn = sqlite3.connect(FUND_FEES_DB)
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.execute(_validate_sql(sql))
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, r)) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def _cond_label(cond: str) -> str:
+    """OR 조건 하나에서 사람이 읽을 이름을 뽑는다(누락 통보용)."""
+    lits = [v.strip("%").replace("%", " ").strip()
+            for v in re.findall(r"'([^']*)'", cond)]
+    lits = [v for v in lits if v]
+    return " ".join(lits[:3]) if lits else cond.strip()[:40]
+
+
+def _fill_or_groups(sql: str, rows: list, state: dict) -> tuple:
+    """OR로 묶인 조건 중 0행인 쪽만 따로 완화해 다시 조회한다.
+
+    반환: (보강된 행, 끝내 못 찾은 조건 이름 목록)
+    분해가 불가능하거나 모든 조건이 이미 행을 갖고 있으면 입력을 그대로
+    돌려준다 — 즉 단일 펀드 질문의 동작은 전혀 건드리지 않는다.
+    """
+    split = _split_or_groups(sql)
+    if not split:
+        return rows, []
+    prefix, conds, suffix = split
+
+    merged = list(rows)
+    seen = {tuple(r.items()) for r in merged}
+    missing = []
+
+    for cond in conds:
+        sub = f"{prefix} {cond} {suffix}".strip()
+        try:
+            got = _run_sql_rows(sub)
+        except Exception:                                # noqa: BLE001
+            continue        # 분해 실행이 실패하면 원래 결과를 그대로 둔다
+        if got:
+            continue
+
+        relaxed = _relax_fund_name(sub)
+        if relaxed:
+            # 본경로와 같은 정규화를 태운다(클래스 표기·판매경로)
+            relaxed = _normalize_channel_sql(_normalize_class_sql(relaxed))
+            try:
+                got = _run_sql_rows(relaxed)
+            except Exception:                            # noqa: BLE001
+                got = []
+
+        if got:
+            added = 0
+            for r in got:
+                k = tuple(r.items())
+                if k in seen:
+                    continue
+                seen.add(k)
+                merged.append(r)
+                added += 1
+            if added:
+                state["trace"].append(
+                    f"fee_sql: OR 조건 '{_cond_label(cond)}'이 0행 → 그 조건만 "
+                    f"완화해 {added}행 보강\n  {relaxed}")
+            else:
+                state["trace"].append(
+                    f"fee_sql: OR 조건 '{_cond_label(cond)}'은 완화해 보니 이미 "
+                    f"결과에 포함된 행이었음")
+        else:
+            label = _cond_label(cond)
+            missing.append(label)
+            state["trace"].append(
+                f"fee_sql: OR 조건 '{label}'은 완화 후에도 0행 — 누락으로 통보")
+
+    return merged[:50], missing
+
+
 def _extract_sql(text: str) -> str:
     """HCX 응답에서 SQL 쿼리를 추출한다.
 
@@ -1763,22 +1935,6 @@ def fee_sql(state: dict) -> dict:
             rows = [dict(zip(cols, r)) for r in cur.fetchall()]
             conn.close()
 
-            # HCX가 만든 SQL의 ORDER BY를 믿지 않는다. "가장 싼 게 뭔가요?" 질문에서
-            # GROUP BY만 쓰고 ORDER BY를 빠뜨려 LLM이 정렬 안 된 30행을 눈으로 훑다가
-            # 최솟값을 놓친 사례가 실제로 있었다(Q-014, fee_total 0.15%인 NH-Amundi를
-            # 두고 0.22%짜리를 "가장 싸다"고 답함). SQL을 못 믿으면 파이썬으로 다시
-            # 정렬한다 — fee_total 컬럼이 있고 질문에 최저/최고 신호가 있을 때만.
-            if rows and "fee_total" in rows[0]:
-                low_q = q.lower()
-                if any(k in low_q for k in SQL_SORT_ASC):
-                    rows = sorted(rows, key=lambda r: (r.get("fee_total") is None,
-                                                        r.get("fee_total")))
-                    state["trace"].append("fee_sql: 최저값 질문 감지 → fee_total 오름차순 재정렬")
-                elif any(k in low_q for k in SQL_SORT_DESC):
-                    rows = sorted(rows, key=lambda r: (r.get("fee_total") is None,
-                                                        -(r.get("fee_total") or 0)))
-                    state["trace"].append("fee_sql: 최고값 질문 감지 → fee_total 내림차순 재정렬")
-
             # 0행이면 펀드명 완전일치 때문일 공산이 크다. LIKE로 바꿔 한 번 더.
             # LLM을 다시 부르지 않으므로 비용도 지연도 거의 없다.
             if not rows:
@@ -1805,6 +1961,27 @@ def fee_sql(state: dict) -> dict:
                     except Exception as e:                   # noqa: BLE001
                         state["trace"].append(
                             f"fee_sql: 완화 재조회 실패 ({type(e).__name__})")
+
+            # OR로 묶인 조건 중 한쪽만 걸린 경우를 여기서 메운다.
+            # (전체가 0행일 때만 발동하는 위 완화로는 잡히지 않는 구멍이다)
+            rows, missing = _fill_or_groups(sql, rows, state)
+            state["sql_missing"] = missing
+
+            # HCX가 만든 SQL의 ORDER BY를 믿지 않는다. "가장 싼 게 뭔가요?" 질문에서
+            # GROUP BY만 쓰고 ORDER BY를 빠뜨려 LLM이 정렬 안 된 30행을 눈으로 훑다가
+            # 최솟값을 놓친 사례가 실제로 있었다(Q-014, fee_total 0.15%인 NH-Amundi를
+            # 두고 0.22%짜리를 "가장 싸다"고 답함). SQL을 못 믿으면 파이썬으로 다시
+            # 정렬한다 — fee_total 컬럼이 있고 질문에 최저/최고 신호가 있을 때만.
+            if rows and "fee_total" in rows[0]:
+                low_q = q.lower()
+                if any(k in low_q for k in SQL_SORT_ASC):
+                    rows = sorted(rows, key=lambda r: (r.get("fee_total") is None,
+                                                        r.get("fee_total")))
+                    state["trace"].append("fee_sql: 최저값 질문 감지 → fee_total 오름차순 재정렬")
+                elif any(k in low_q for k in SQL_SORT_DESC):
+                    rows = sorted(rows, key=lambda r: (r.get("fee_total") is None,
+                                                        -(r.get("fee_total") or 0)))
+                    state["trace"].append("fee_sql: 최고값 질문 감지 → fee_total 내림차순 재정렬")
 
             state["sql_query"] = sql
             state["sql_rows"] = rows
@@ -2388,6 +2565,22 @@ def compose(state: dict) -> dict:
                 "행이 없었습니다. 검색 근거에 보수율이 명시돼 있지 않다면 "
                 "'확인되지 않는다'고 밝히십시오. 표 조각이나 셀 참조처럼 "
                 "보이는 문자열을 보수율인 것처럼 제시하지 마십시오.")
+
+    # SQL이 여러 펀드를 물었는데 일부만 잡힌 경우.
+    # 전체가 0행일 때만 경고하던 위 sql_empty로는 못 잡는 구멍이다 —
+    # 반쪽짜리 표를 경고 없이 받으면 모델이 나머지 한쪽 숫자를 지어낸다
+    # (v4_stress H06·H10, 2026-08-30).
+    miss = state.get("sql_missing") or []
+    if miss:
+        user_suffix += (
+            "\n\n※ 보수 데이터베이스에 다음 항목의 행이 없었습니다: "
+            + ", ".join(miss) + ".\n"
+            "위 SQL 조회 결과 표에는 이 항목의 수치가 들어 있지 않습니다. "
+            "표에 있는 다른 펀드·클래스의 값을 이 항목의 값인 것처럼 쓰거나, "
+            "검색 근거의 표 조각에서 숫자처럼 보이는 문자열을 주워 오지 "
+            "마십시오. 검색 근거에 이 항목의 보수율이 명시돼 있지 않다면 "
+            "그 항목만 '확인되지 않는다'고 밝히고, 확인된 나머지 항목은 "
+            "그대로 답하십시오.")
 
     # ── 마지막에 한 번 더 못 박는다 ────────────────────────────────
     # 시스템 프롬프트가 3천 자를 넘다 보니 뒤쪽 규칙이 묻힌다. 실측으로
