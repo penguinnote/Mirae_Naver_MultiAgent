@@ -1672,6 +1672,22 @@ def _split_or_groups(sql: str):
     return None
 
 
+def _drop_top_level_limit(suffix: str) -> str:
+    """비교용 다중-펀드 쿼리에서 LIMIT을 지운다.
+
+    실측 근거(V4S-P09, 2026-08-31): "더 낮은 쪽을 골라주세요"라는 표현을 보고
+    HCX가 `ORDER BY fee_total ASC LIMIT 1`을 붙였다. OR로 묶인 여러 펀드
+    조건 위에서 LIMIT 1은 "OR 전체를 합친 결과 중 가장 싼 행 하나"라는
+    뜻이라, 비교 대상 펀드 중 하나가 통째로 사라진다 — 0행이 아니라 아예
+    안 보이므로, 부분 누락을 잡는 _fill_or_groups도 이 케이스는 못 잡는다
+    (조건 하나만 떼서 다시 물으면 그 조건은 멀쩡히 non-empty로 나오기
+    때문에 "0행이라 완화가 필요하다"는 판단 자체가 안 선다). 비교 질문에서
+    LIMIT은 애초에 의미가 없다 — 몇 행이 뜨는지가 아니라 비교 대상이 전부
+    보이는 게 목적이다. ORDER BY는 정렬 힌트로 남겨둔다.
+    """
+    return re.sub(r"\bLIMIT\s+\d+\b", "", suffix, flags=re.I).strip()
+
+
 def _run_sql_rows(sql: str) -> list:
     """검증을 거쳐 SQL을 실행하고 dict 행 목록을 돌려준다."""
     import sqlite3
@@ -1927,6 +1943,21 @@ def fee_sql(state: dict) -> dict:
             if ch != sql:
                 state["trace"].append("fee_sql: channel 값을 DB 실제 값으로 정규화")
                 sql = ch
+
+            # 다중 펀드 비교 쿼리에 LIMIT이 붙어 있으면 지운다(위 설명 참조).
+            # 실행 전에 처리해야 한다 — 실행 후에 손보면 이미 잘려나간 행은
+            # 되살릴 수 없다.
+            multi = _split_or_groups(sql)
+            if multi:
+                m_prefix, m_conds, m_suffix = multi
+                m_new_suffix = _drop_top_level_limit(m_suffix)
+                if m_new_suffix != m_suffix:
+                    sql = _validate_sql(
+                        f"{m_prefix} "
+                        f"{' OR '.join(f'({c})' for c in m_conds)} "
+                        f"{m_new_suffix}".strip())
+                    state["trace"].append(
+                        "fee_sql: 다중 펀드 비교 쿼리에서 LIMIT 제거 → 전체 대상 조회")
 
             conn = sqlite3.connect(FUND_FEES_DB)
             conn.row_factory = sqlite3.Row
