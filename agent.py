@@ -1822,6 +1822,169 @@ def _fill_or_groups(sql: str, rows: list, state: dict) -> tuple:
     return merged[:50], missing
 
 
+_KNOWN_FUND_SHORTHANDS = None
+_CLASS_CODES_CACHE = None
+_SHORTHAND_STRIP_RE = re.compile(
+    r"(증권자?투자신탁|증권투자신탁|증권투자회사|전환형자?투자신탁|제\d호|\(.*?\)|\[.*?\]|\s+)")
+
+
+def _class_codes():
+    """class_code 전체 목록을 (전체, 2글자 이상만, 정규식 alternation)으로
+    캐시한다. DB에서 한 번만 읽는다.
+    """
+    global _CLASS_CODES_CACHE
+    if _CLASS_CODES_CACHE is None:
+        import sqlite3
+        conn = sqlite3.connect(FUND_FEES_DB)
+        codes = sorted({r[0] for r in conn.execute(
+            "SELECT DISTINCT class_code FROM fund_fees WHERE class_code IS NOT NULL")},
+            key=len, reverse=True)
+        conn.close()
+        multi = [c for c in codes if len(c) >= 2]
+        alt = "|".join(re.escape(c) for c in codes)
+        _CLASS_CODES_CACHE = (codes, multi, alt)
+    return _CLASS_CODES_CACHE
+
+
+def _known_fund_shorthands():
+    """DB의 fund_name 73개를 사용자가 부르는 짧은 형태에 가깝게 다듬어
+    캐시한다(운용사 접미사·괄호·공백 제거). text2sql이 완전히 실패했을 때
+    질문 원문에서 실제 펀드를 직접 찾아내는 최후 안전망(아래
+    _fallback_fund_class_sql)이 이 캐시를 쓴다.
+    """
+    global _KNOWN_FUND_SHORTHANDS
+    if _KNOWN_FUND_SHORTHANDS is None:
+        import sqlite3
+        conn = sqlite3.connect(FUND_FEES_DB)
+        names = sorted({r[0] for r in conn.execute(
+            "SELECT DISTINCT fund_name FROM fund_fees") if r[0]})
+        conn.close()
+        out = [(_SHORTHAND_STRIP_RE.sub("", full), full) for full in names]
+        out = [(s, f) for s, f in out if len(s) >= 3]
+        # 긴 후보부터 찾아야 짧은 후보가 긴 펀드명의 부분집합으로 먼저
+        # 걸리는 일이 없다
+        out.sort(key=lambda t: len(t[0]), reverse=True)
+        _KNOWN_FUND_SHORTHANDS = out
+    return _KNOWN_FUND_SHORTHANDS
+
+
+def _find_known_funds(question: str) -> list:
+    """질문 원문에서 알려진 펀드명이 어디에 나오는지 찾는다.
+
+    반환: [(시작위치, 끝위치, 정식 fund_name), …] (위치 순 정렬)
+    """
+    used, hits = [], []
+    for short, full in _known_fund_shorthands():
+        idx = question.find(short)
+        if idx < 0:
+            continue
+        span = (idx, idx + len(short))
+        if any(not (span[1] <= s[0] or span[0] >= s[1]) for s in used):
+            continue          # 이미 더 긴 후보가 이 자리를 차지했다
+        used.append(span)
+        hits.append((idx, span[1], full))
+    hits.sort()
+    return hits
+
+
+def _nearest_code_window(window: str):
+    """펀드명 바로 뒤 창(15자)에서 클래스 코드를 찾는다.
+
+    펀드 매치 위치에 바로 붙어 있다는 게 이미 확인됐으므로, 여기서는
+    한 글자짜리 코드('e','A' 등)도 안전하게 허용한다.
+    """
+    _, _, alt = _class_codes()
+    m = re.search(r"(?:^|[^A-Za-z0-9\-])(" + alt + r")(?![A-Za-z0-9\-])",
+                  " " + window)
+    return m.group(1) if m else None
+
+
+def _global_code_positions(text: str) -> list:
+    """두 글자 이상인 클래스 코드(A-E, Ae, C-Pe 등)가 나온 위치를 문장
+    전체에서 찾는다.
+
+    한 글자짜리 코드('A','C','R','S','e' 등)는 여기서 절대 찾지 않는다 —
+    펀드명 안에 흔한 영문자('파워e단기채'의 'e')와 구분이 안 되기 때문이다.
+    그런 코드는 실제로 매칭된 펀드명 바로 뒤에 붙어 있을 때만
+    (_nearest_code_window) 신뢰한다.
+    """
+    _, multi, _ = _class_codes()
+    found = []
+    for c in multi:
+        for m in re.finditer(
+                r"(?<![A-Za-z0-9\-])" + re.escape(c) + r"(?![A-Za-z0-9\-])", text):
+            found.append((m.start(), m.end(), c))
+    # 겹치면 더 긴 코드를 우선한다
+    found.sort(key=lambda t: (-(t[1] - t[0]), t[0]))
+    used, kept = [], []
+    for s, e, c in found:
+        if any(not (e <= u[0] or s >= u[1]) for u in used):
+            continue
+        used.append((s, e))
+        kept.append((s, c))
+    kept.sort()
+    return kept
+
+
+def _fallback_fund_class_sql(question: str):
+    """text2sql이 fund_name 조건을 아예 안 쓴 SQL을 만들어 0행이 나왔을 때
+    쓰는 최후 안전망. 질문 원문에서 알려진 펀드명과 그 옆의 클래스 코드를
+    직접 찾아 SQL을 재구성한다. 비교 대상(펀드 또는 클래스)이 2개 미만이면
+    포기한다 — 그럴 땐 이 안전망이 원래 SQL과 다를 게 없어서 위험만 늘린다.
+
+    실측 근거(V4S-H06·H11, 2026-08-31): 질문 앞부분에 제도·세제 얘기가
+    있으면 HCX가 그 개념어를 class_label에서 찾으려다 실패하고, 뒤에 나온
+    "펀드명 클래스코드" 비교를 통째로 놓친다 — 프롬프트에 규칙을 추가해도
+    매번 지켜지진 않았다(H06은 고쳐졌지만 다른 표현의 H11은 여전히 실패).
+
+    ⚠ 정규식으로 "펀드명이라고 추정되는 앞 토큰 + 코드"를 직접 뽑는 방식은
+    시도했다가 폐기했다 — 펀드명 자체에 낀 영문자('파워e단기채'의 'e')가
+    진짜 클래스 코드('e')와 구분이 안 돼 오작동했다(2026-08-31 실측).
+    그래서 "알려진 펀드명 73개 중 어느 것이 문장에 나오는가"를 먼저 찾고,
+    그 뒤에만 코드를 찾는 순서로 뒤집었다 — 펀드명 매칭이 먼저 자리를
+    차지하므로 그 안에 낀 영문자가 코드로 오인될 일이 없다.
+    """
+    fund_hits = _find_known_funds(question)
+    if not fund_hits:
+        return None
+
+    code_hits = _global_code_positions(question)
+    have_pos = {p for p, _ in code_hits}
+    for start, end, full in fund_hits:
+        near = _nearest_code_window(question[end:end + 15])
+        if near and end not in have_pos:
+            code_hits.append((end, near))
+    code_hits.sort()
+
+    pairs = {}
+    for pos, code in code_hits:
+        best = None
+        for start, end, full in fund_hits:
+            if end <= pos and (best is None or end > best[1]):
+                best = (start, end, full)
+        if best is None or pos - best[1] > 30:
+            continue                              # 너무 멀면 관련 없다고 본다
+        pairs.setdefault(best[2], set()).add(_norm_class(code))
+
+    total_codes = sum(len(v) for v in pairs.values())
+    if len(pairs) < 2 and total_codes < 2:
+        return None                               # 비교가 아니면 이 안전망은 안 쓴다
+
+    conds = []
+    for full, code_set in pairs.items():
+        esc = full.replace("'", "''")
+        if len(code_set) == 1:
+            conds.append(f"(fund_name = '{esc}' AND {_CLASS_EXPR} = "
+                          f"'{next(iter(code_set))}')")
+        else:
+            in_list = ", ".join(f"'{c}'" for c in sorted(code_set))
+            conds.append(f"(fund_name = '{esc}' AND {_CLASS_EXPR} IN ({in_list}))")
+
+    return ("SELECT fund_name, class_code, fee_total, front_load_text, page "
+            "FROM fund_fees WHERE " + " OR ".join(conds) +
+            " ORDER BY fee_total ASC LIMIT 50")
+
+
 def _strip_sql_comments(sql: str) -> str:
     """SQL 앞뒤에 낀 줄 주석(-- …)·블록 주석(/* … */)을 지운다.
 
@@ -2065,6 +2228,28 @@ def fee_sql(state: dict) -> dict:
                     except Exception as e:                   # noqa: BLE001
                         state["trace"].append(
                             f"fee_sql: 완화 재조회 실패 ({type(e).__name__})")
+
+            # 위 완화로도 못 건졌고, 애초에 SQL에 fund_name 조건 자체가
+            # 없었다면 — text2sql이 질문 속 펀드 비교를 통째로 놓친
+            # 것이다(위 _fallback_fund_class_sql 설명 참조). 질문 원문에서
+            # 직접 펀드·클래스를 찾아 마지막으로 한 번 더 시도한다.
+            if not rows and "fund_name" not in sql_plain.lower():
+                fb_sql = _fallback_fund_class_sql(q)
+                if fb_sql:
+                    try:
+                        fb_rows = _run_sql_rows(fb_sql)
+                    except Exception as e:                   # noqa: BLE001
+                        fb_rows = []
+                        state["trace"].append(
+                            f"fee_sql: 직접 재구성 SQL 실행 실패 "
+                            f"({type(e).__name__})")
+                    if fb_rows:
+                        rows = fb_rows
+                        sql = fb_sql
+                        state["trace"].append(
+                            "fee_sql: text2sql이 fund_name 없는 SQL을 만들어 "
+                            f"0행 → 질문 원문에서 펀드·클래스를 직접 추출해 "
+                            f"재구성 ({len(rows)}행)\n  {fb_sql}")
 
             # OR로 묶인 조건 중 한쪽만 걸린 경우를 여기서 메운다.
             # (전체가 0행일 때만 발동하는 위 완화로는 잡히지 않는 구멍이다)
