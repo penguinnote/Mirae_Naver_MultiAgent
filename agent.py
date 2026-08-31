@@ -992,6 +992,16 @@ class Retriever:
             if len(t) >= 3:
                 _DOC_TITLES[doc] = t
 
+        # 데이터가 문서 제목을 직접 들고 있으면 휴리스틱보다 그걸 우선한다.
+        # _make_title()은 첫 청크 앞머리를 긁는 방식이라 청킹이 바뀌면
+        # 무너진다 — 제도 청크 교체 후 58개 문서 중 41개가 오염됐고
+        # 12개는 '질문'이 됐다(실측 2026-08-31).
+        for m in self.meta:
+            dt = (m.get("doc_title") or "").strip()
+            doc = m.get("doc_id") or ""
+            if dt and doc:
+                _DOC_TITLES[doc] = dt
+
         # 펀드 문서는 코드가 아니라 펀드명으로 부른다.
         for fc, nm in fund_names.items():
             if nm:

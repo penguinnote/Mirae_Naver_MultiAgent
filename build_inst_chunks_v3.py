@@ -16,6 +16,7 @@
 import hashlib
 import json
 import os
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -68,26 +69,46 @@ def assign_new_ids(chunks):
     return new_ids, id_map
 
 
-# ── 3-4: section 채우기 ──────────────────────────────
+# ── doc_title 정리 ───────────────────────────────────
+def clean_doc_title(t):
+    """document_title을 3~30자 문서 제목으로 정리한다."""
+    t = " ".join((t or "").split())
+    flat = re.sub(r"\s", "", t)
+    head = flat[:4]
+    p = flat.find(head, 4) if len(head) >= 4 else -1
+    if 6 <= p <= 30:
+        cnt, out = 0, []
+        for ch in t:
+            if not ch.isspace():
+                cnt += 1
+            if cnt > p:
+                break
+            out.append(ch)
+        t = "".join(out).strip()
+    if len(t) > 30:
+        cut = t.rfind(" ", 0, 30)
+        t = t[:cut if cut >= 10 else 30]
+    return t.strip(" -·,")
+
+
+# ── section 채우기 (5단계 개정) ──────────────────────
 def pick_section(x):
-    if x.get("title"):
-        return x["title"]
+    """heading_path와 table_title만 쓴다. title·document_title은 문장형이라 누출 원인."""
     hp = x.get("heading_path")
     if hp and isinstance(hp, list) and any(hp):
         return " > ".join(hp)
     if x.get("table_title"):
         return x["table_title"]
-    if x.get("document_title"):
-        return x["document_title"]
-    return ""
+    return None
 
 
-# ── 3-3: 필드 매핑 ───────────────────────────────────
-def convert_chunk(x, new_id):
+# ── 필드 매핑 ────────────────────────────────────────
+def convert_chunk(x, new_id, doc_titles):
     return {
         "chunk_id":     new_id,
         "doc_id":       x["document"],
         "doc_type":     "연금문서",
+        "doc_title":    doc_titles[x["document"]],
         "fund_code":    None,
         "fund_name":    None,
         "kofia_code":   None,
@@ -139,9 +160,37 @@ def verify(kept_lines, new_records, new_ids, id_map, embed_map):
     _chk("chunk_id 내부 중복", internal_dup, 0)
     _chk("신규 id ↔ 기존 잔존 id 충돌", dup_new, 0)
 
-    # ── 4) section 빈 값
-    empty_sec = sum(1 for r in new_records if not r["section"])
-    _chk("section 빈 문자열/None인 신규 청크", empty_sec, 0)
+    # ── 4) section 채움률 (heading_path + table_title만 → 121/760)
+    filled_sec = sum(1 for r in new_records if r.get("section"))
+    _chk("section 채워진 신규 청크", filled_sec, 121)
+    # 문장형 잔재 검사 — heading_path 원본의 구두점(1건)은 허용
+    dash_sec = sum(1 for r in new_records if r.get("section") and " - " in r["section"])
+    _chk("section에 ' - '가 든 것 (heading_path 원본 구두점 1건 허용)", dash_sec <= 1, True)
+
+    # ── 4b) doc_title 검증
+    has_dt = sum(1 for r in new_records if r.get("doc_title"))
+    _chk("doc_title 채워진 연금문서 청크", has_dt, 760)
+    dt_uniq = set(r["doc_title"] for r in new_records if r.get("doc_title"))
+    # 53개: "중도인출" 6문서(doc22,46~50)의 원본 제목이 동일해서 고유값은 53
+    _chk("doc_title 고유값 개수", len(dt_uniq), 53)
+    dt_lens = [len(r["doc_title"]) for r in new_records if r.get("doc_title")]
+    _chk("doc_title 최소 길이 ≥ 3", min(dt_lens) >= 3, True)
+    _chk("doc_title 최대 길이 ≤ 30", max(dt_lens) <= 30, True)
+
+    # ── 4c) chunk_id 집합 ↔ 라이브 파일 chunk_id 집합 일치 (Chroma 보호)
+    new_all_ids = set()
+    for line in kept_lines:
+        new_all_ids.add(json.loads(line)["chunk_id"])
+    for r in new_records:
+        new_all_ids.add(r["chunk_id"])
+    live_ids = set()
+    with open(LIVE_JSONL, encoding="utf-8") as f:
+        for line in f:
+            live_ids.add(json.loads(line)["chunk_id"])
+    only_new = new_all_ids - live_ids
+    only_live = live_ids - new_all_ids
+    _chk("chunk_id 집합 일치 (NEW에만)", len(only_new), 0)
+    _chk("chunk_id 집합 일치 (LIVE에만)", len(only_live), 0)
 
     # ── 5) page None
     none_page = sum(1 for r in new_records if r["page"] is None)
@@ -246,15 +295,26 @@ def main():
     print(f"  재발급 완료: {len(id_map)}개")
     print(f"  예시: {list(id_map.items())[:3]}")
 
-    # 3) 필드 매핑
-    print("\n[3] 필드 매핑 → 신규 레코드 생성")
+    # 3) 문서 제목 정리
+    print("\n[3] 문서 제목 정리")
+    doc_titles = {}
+    for x in raw_chunks:
+        doc = x["document"]
+        if doc not in doc_titles:
+            doc_titles[doc] = clean_doc_title(x.get("document_title", ""))
+    print(f"  문서 {len(doc_titles)}개 제목 추출")
+    for doc in sorted(doc_titles):
+        print(f"    {doc}: {doc_titles[doc]}")
+
+    # 4) 필드 매핑
+    print("\n[4] 필드 매핑 → 신규 레코드 생성")
     new_records = []
     for i, x in enumerate(raw_chunks):
-        new_records.append(convert_chunk(x, new_ids[i]))
+        new_records.append(convert_chunk(x, new_ids[i], doc_titles))
     print(f"  생성: {len(new_records)}개")
 
-    # 4) 기존 청크에서 비-연금문서만 유지
-    print("\n[4] 기존 청크 필터링 (연금문서 377줄 제거)")
+    # 5) 기존 청크에서 비-연금문서만 유지
+    print("\n[5] 기존 청크 필터링 (연금문서 제거)")
     kept_lines = []
     dropped = 0
     with open(LIVE_JSONL, encoding="utf-8") as f:
@@ -266,23 +326,23 @@ def main():
                 kept_lines.append(line.rstrip("\n"))
     print(f"  유지: {len(kept_lines)}, 제거: {dropped}")
 
-    # 5) 임베딩 → 새 id로 매핑
-    print("\n[5] 임베딩 id 변환")
+    # 6) 임베딩 → 새 id로 매핑
+    print("\n[6] 임베딩 id 변환")
     embed_new = {}
     for old_id, emb in embed_map_raw.items():
         embed_new[id_map[old_id]] = emb
     print(f"  변환: {len(embed_new)}개")
 
-    # 6) 검증
-    print("\n[6] 검증")
+    # 7) 검증
+    print("\n[7] 검증")
     verify(kept_lines, new_records, new_ids, id_map, embed_new)
 
     if _fail_count > 0:
         print(f"\n❌ 검증 실패 {_fail_count}건 — 파일을 쓰지 않습니다.")
         sys.exit(1)
 
-    # 7) 파일 쓰기
-    print("\n[7] 파일 쓰기")
+    # 8) 파일 쓰기
+    print("\n[8] 파일 쓰기")
 
     # chunks_final.NEW.jsonl
     with open(OUT_JSONL, "w", encoding="utf-8") as f:
@@ -307,12 +367,12 @@ def main():
     sz = OUT_ID_MAP.stat().st_size
     print(f"  {OUT_ID_MAP}  ({sz:,} bytes)")
 
-    # 8) 샘플 출력
-    print("\n[8] 샘플 청크")
+    # 9) 샘플 출력
+    print("\n[9] 샘플 청크")
     print_samples(new_records, raw_chunks)
 
-    # 9) 라이브 파일 무결성 확인
-    print("\n[9] 라이브 파일 무결성")
+    # 10) 라이브 파일 무결성 확인
+    print("\n[10] 라이브 파일 무결성")
     live_mtime = os.path.getmtime(LIVE_JSONL)
     print(f"  chunks_final.jsonl mtime: {live_mtime}")
     print("  (이 값이 스크립트 실행 전과 같은지 확인)")
