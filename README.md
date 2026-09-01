@@ -16,18 +16,18 @@ flowchart TD
     Q["질문<br/>GET /answer?question_id=&question="]
     SAFE{"safety_check<br/>주민번호·인젝션 정규식"}
     REFUSE["표준 거절 응답"]
-    ROUTE["route<br/>규칙 기반 · LLM 미사용<br/>doc_type / need_sql / need_calc 결정"]
-    RETR["retrieve<br/>벡터 + BM25 → RRF 융합<br/>TOP_K=8"]
+    ROUTE["route<br/>규칙 기반 · LLM 미사용<br/>doc_type / hybrid / need_sql / need_calc"]
+    RETR["retrieve<br/>벡터 + BM25 → RRF 융합 · TOP_K=8<br/>복합 질의는 제도/상품 분할 배분"]
     D1{"need_sql"}
-    FEE["fee_sql<br/>HCX가 SQL 작성 → 표기 정규화 → 조회"]
+    FEE["fee_sql<br/>HCX가 SQL 작성 → 표기 정규화 → 조회<br/>0행이면 완화 재조회"]
     D2{"need_calc"}
     CALC["calc<br/>파이썬으로 직접 계산"]
     COMP["compose<br/>HCX-007 · 근거만 사용"]
     RESP["to_response<br/>5필드 문자열 JSON"]
 
-    CHROMA[("Chroma<br/>14,813 청크")]
+    CHROMA[("Chroma<br/>15,196 청크")]
     BM25[("BM25<br/>bm25.pkl")]
-    FEEDB[("fund_fees.sqlite<br/>73펀드 363행")]
+    FEEDB[("fund_fees.sqlite<br/>76펀드 408행")]
 
     Q --> SAFE
     SAFE -->|"차단"| REFUSE
@@ -63,7 +63,7 @@ flowchart LR
     B1["build_dataset.py<br/>파싱 · 표 추출 · 청킹"]
     C1["chunks.jsonl<br/>35,007 청크"]
     B2["finalize_dataset.py<br/>법정 공통문구 중복 제거"]
-    C2["chunks_final.jsonl<br/>14,813 청크"]
+    C2["chunks_final.jsonl<br/>15,196 청크"]
     B3["embed_and_index.py<br/>CLOVA 임베딩 + 인덱싱"]
     B4["build_fund_fees.py<br/>수수료 표 → 정규화 테이블"]
     OUT1[("Chroma + bm25.pkl")]
@@ -150,23 +150,35 @@ LLM이 만든 SQL은 문법은 맞는데 **리터럴이 DB의 실제 값과 안 
 
 | 파일 | 하는 일 |
 |---|---|
-| `CLAUDE.md` | 대회 요구사항·규격·작업 규칙 원본 |
+| `기술제안서.md` | 제출용 기술 제안서 — 문제 정의 · 설계 근거 · 검증 체계 |
 | `DATA_INTERFACE.md` | 청크 스키마와 `fund_fees` 스키마 정의 |
 
 ---
 
 ## 현재 성능
 
-| 평가셋 | 점수 | 비고 |
-|---|---|---|
-| 통합 56문항 | **89.3%** | A 90.3 / B 92.3 / C 79.4 / E 91.9 |
-| 홀드아웃 40문항 | **92.5%** | 자체 구축, 기준선 89.9 ± 1.3p |
-| 공식 v4 30문항 (strict) | **66.7%** | 정답지 열기 전(freeze) 기준 |
-| 〃 | 80.0% | 정답지를 보고 튜닝한 뒤(post-tune) |
-| killing camp 40문항 | 73.9% | 자체 적대적 평가셋. SQL 수정 반영 전 1회 측정 |
+수치는 **측정일과 함께** 적습니다. 코드가 바뀌면 옛 값은 옛 값입니다.
+기술제안서 7절과 같은 출처를 씁니다.
 
-> ⚠️ 공식 v4의 80.0%는 **정답지를 연 뒤에 튜닝한 값**입니다.
-> `FAIRNESS_AUDIT.md`가 사후 튜닝을 별도 표기하도록 요구하므로, 두 값을 항상 같이 적습니다.
+| 평가셋 | 문항 | 정답률 | 근거 제공률 | 측정일 |
+|---|---:|---:|---:|---|
+| `evalset_v1` | 40 | 80.0% | 95.0% | 2026-08-31 |
+| `evalset_v2` | 22 | 86.4% | 100.0% | 2026-09-01 |
+| v4 stress | 36 | 80.6% | 80.6% | 2026-08-31 |
+| ext30 | 30 | 90.0% | 73.3% | 2026-08-31 |
+| `gold_holdout_v3` | 24 | 종합 75.6% | — | 2026-08-30 ⚠️ |
+
+`evalset_v2`는 26문항 중 `coverage=none` 4문항을 뺀 22문항 기준입니다.
+
+> ⚠️ `gold_holdout_v3`의 75.6%는 커밋 `6ba9c13`(08-30) 기준입니다. 이후 제도 문서
+> 제목 처리와 세액공제 규칙이 바뀌었으므로, 재측정 전까지는 옛 값으로 봐야 합니다.
+
+**공정성 표기 원칙** — 정답지를 연 뒤에 튜닝한 값은 freeze 값과 **항상 같이** 적습니다.
+공식 v4 30문항(strict)은 freeze **66.7%** / post-tune **80.0%** 입니다.
+
+**근거 제공률**은 "근거를 붙였나"가 아니라 *정답 핵심어가 `retrieved_context`에 실제로
+들어왔나*를 봅니다(`eval_answers.py`의 `miss_c`). 그래서 근거 제공률이 정답률보다
+높으면 **검색은 됐는데 생성이 그 근거를 못 쓴 것**이라고 읽습니다.
 
 측정할 때마다 값이 흔들리는 이유는 **검색이 아니라 생성** 쪽입니다. 검색은 임베딩+BM25라
 온도가 없어 결정적이고, 실제로 여러 번 돌려도 C(출처) 점수가 소수점까지 동일합니다.
@@ -178,8 +190,8 @@ LLM이 만든 SQL은 문법은 맞는데 **리터럴이 DB의 실제 값과 안 
 |---|---|
 | 원본 문서 | 316건 (OK 314 / LOW_YIELD 2) |
 | 청크 (중복 제거 전) | 35,007 |
-| 청크 (인덱싱 대상) | 14,813 — 투자설명서 14,273 / 연금문서 377 / 기타 163 |
-| `fund_fees` | 73펀드 363행 |
+| 청크 (인덱싱 대상) | 15,196 — 투자설명서 14,273 / 연금문서 760 / 기타 163 |
+| `fund_fees` | 76펀드 408행 |
 
 ---
 
