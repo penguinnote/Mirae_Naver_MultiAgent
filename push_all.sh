@@ -43,6 +43,35 @@ LEAK=$(git ls-files \
 [ -z "$LEAK" ] || { printf '%s\n' "$LEAK"; die "정답지·실행결과가 추적되고 있습니다."; }
 echo "  ✅ 정답지·실행결과 추적 안 됨"
 
+# 위 검사는 이름 "앞"만 본다. base_with_gold_*.json / result_with_gold_*.csv 처럼
+# gold가 중간에 낀 파생물이 전부 빠져나갔다. 위치를 가리지 않고 다시 본다.
+# make_raw_from_gold.py 는 gold 파일을 인자로 읽는 실행 스크립트일 뿐
+# 파일 안에 정답 문자열이 없어 예외로 둔다. (질문·question_id만 읽는다)
+unlock
+LEAK2=$(git ls-files | grep -i 'gold' | grep -vxF 'make_raw_from_gold.py')
+[ -z "$LEAK2" ] || { printf '%s\n' "$LEAK2"; die "이름에 gold가 든 파일이 추적되고 있습니다."; }
+echo "  ✅ gold 파생 파일 추적 안 됨"
+
+# 실행 결과는 전부 정답지에서 파생된다. result_ 로 시작하면 무조건 막는다.
+unlock
+LEAK3=$(git ls-files | grep -E '^result_')
+[ -z "$LEAK3" ] || { printf '%s\n' "$LEAK3"; die "실행 결과(result_*)가 추적되고 있습니다."; }
+echo "  ✅ 실행 결과(result_*) 추적 안 됨"
+
+# git ls-files 는 한글 경로를 \353\266\204 같은 8진 이스케이프로 내보내고(quotepath),
+# macOS는 파일명을 NFD로 저장한다. 그래서 위 grep의 '공유_|분석_' 한글 패턴은
+# 사실 한 번도 걸린 적이 없다. -z 로 원문을 받아 NFC로 되돌린 뒤 다시 본다.
+unlock
+LEAK4=$(git ls-files -z | python3 -c '
+import re, sys, unicodedata
+pat = re.compile(r"CLAUDE|작업지시|지시문|공유_|분석_", re.I)
+for f in sys.stdin.buffer.read().decode("utf-8").split("\0"):
+    if f and pat.search(unicodedata.normalize("NFC", f)):
+        print(f)
+')
+[ -z "$LEAK4" ] || { printf '%s\n' "$LEAK4"; die "Claude 작업 문서·공유 리포트가 추적되고 있습니다."; }
+echo "  ✅ Claude 작업 문서 추적 안 됨"
+
 echo
 echo "── 올라갈 커밋 ───────────────────────────────────────────"
 unlock

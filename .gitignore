@@ -20,6 +20,10 @@ dataset/bm25.pkl
 dataset/fund_fees.sqlite
 dataset/emb_cache.sqlite
 dataset/emb_cache.sqlite-*
+# 재청킹 중간 산출물(.OLD/.STEP3/.NEW)도 같은 이유로 막는다. 합쳐서 70MB다.
+dataset/chunks_final.*.jsonl
+dataset/*.NEW.json
+dataset/*.NEW.jsonl
 
 # manifest.csv는 품질 점검 기록이라 커밋해두면 유용합니다.
 !dataset/manifest.csv
@@ -58,6 +62,29 @@ questions_only_*.json
 blind_runner*.py
 leakage_*.json
 
+# 이름 중간에 gold가 낀 파생물(base_with_gold_*, result_with_gold_*)이
+# 접두어 규칙을 전부 피해 나갔다. 이제 위치를 가리지 않고 막는다.
+*_with_gold*
+*gold_quality*
+# 실행 결과는 전부 정답지에서 파생된다. 이름을 하나씩 막다 계속 샜다.
+result_*.json
+result_*.csv
+evalset_v4_*.json
+evalset_v5_*.json
+trace_*.json
+
+# 위 광역 차단에 걸리지만 정답이 없는 병합 스크립트는 예외로 둔다.
+# (gold 파일을 인자로 읽을 뿐 파일 안에 정답 문자열이 없다)
+!*_with_gold*.py
+!*gold_quality*.py
+
+# v4·v5 말고도 gold_answer를 담은 평가셋이 계속 생긴다(ext30·or6·or9 실측 확인).
+# 이름을 하나씩 쫓지 말고 evalset_*.json 을 통째로 막는다. 새 평가셋은
+# 기본이 "안 올라감"이고, 올릴 것만 아래처럼 예외로 적는다.
+evalset_*.json
+!evalset_v1.json
+!evalset_v2.json
+
 # ── 일회성 진단 스크립트 ──────────────────────────────────
 diag_api*.py
 verify_fix*.py
@@ -69,3 +96,11 @@ spotcheck*.py
 공유_*.md
 # report_share.py --all 의 기본 출력도 정답과 채점 키워드를 그대로 담는다.
 분석_*.md
+
+# ── Claude Code 작업 문서 (2026-09-01) ────────────────────
+# 저장소에 노출하지 않는다. 로컬 파일은 그대로 두고 추적만 끊었다.
+# (과거 커밋에 남은 것은 이번에 이력 재작성하지 않기로 결정했다)
+CLAUDE.md
+작업지시_클로드코드.md
+작업지시_*.md
+지시문_*.md
