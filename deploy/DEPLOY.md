@@ -38,16 +38,49 @@ python eval_answers.py --endpoint http://127.0.0.1:8000/answer --evalset evalset
 ```bash
 sudo apt update && sudo apt install -y python3.10-venv git nginx
 sudo mkdir -p /opt/pension-agent && sudo chown $USER /opt/pension-agent
-git clone https://github.com/penguinnote/Mirae_Naver_MultiAgent.git /opt/pension-agent
+git clone --depth 1 https://github.com/penguinnote/Mirae_Naver_MultiAgent.git /opt/pension-agent
 cd /opt/pension-agent
 python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-`.env`는 git에 올라가지 않으므로(`.gitignore`) **직접 서버에 옮겨야 합니다** — scp로
-복사하거나 새로 만드세요. `CLAUDE_API_KEY` 등 CLOVA Studio 키 4종이 들어있어야
-`agent.py`가 정상 동작합니다. `.env`는 `agent.py`와 **같은 폴더**에 두세요
-(agent.py가 자기 파일 위치 기준으로 읽습니다).
+`--depth 1`은 이력을 받지 않는 옵션입니다. 저장소에 주최측 원본 문서 161개(약 200MB)가
+들어 있어서 전체 클론은 오래 걸립니다. 서버는 이 원본을 읽지 않습니다 — 서버가 여는 건
+아래 인덱스 4개뿐입니다.
+
+`.env`는 git에 올라가지 않으므로(`.gitignore`) **직접 서버에 옮겨야 합니다.**
+
+**로컬 `.env`를 scp로 그대로 복사하세요. `.env.example`을 보고 새로 만들지 마세요.**
+`.env.example`에는 `CLOVA_CHAT_REQUEST_ID`와 `CLOVA_RERANK_REQUEST_ID`가 빠져 있습니다.
+새로 만들면 이 둘이 없는 채로 뜨고, HCX 답변 생성과 리랭커 호출이 서비스 앱이 아니라
+**테스트 앱 한도로 처리됩니다.** 평가 기간 중 호출이 막히는 경로입니다.
+
+운영에 필요한 키는 8종입니다.
+
+| 키 | 쓰는 곳 |
+|---|---|
+| `CLOVA_API_KEY` | 전 구간 공통 |
+| `CLOVA_CHAT_REQUEST_ID` | HCX-007 답변 생성 · Text2SQL |
+| `CLOVA_RERANK_REQUEST_ID` | 리랭커 |
+| `CLOVA_EMBED_URL` · `CLOVA_EMBED_REQUEST_ID` · `CLOVA_EMBED_AUTH` | 질의 임베딩 |
+| `CLOVA_OCR_URL` · `CLOVA_OCR_SECRET` | 인덱스 구축 전용 — 서버 런타임에는 안 씁니다 |
+
+`X-NCP-CLOVASTUDIO-REQUEST-ID`는 임베딩·리랭커·HCX가 **각각 다른 값**입니다.
+섞어 쓰면 엉뚱한 서비스 앱 한도로 처리됩니다.
+
+`CLOVA_CHAT_URL`·`CLOVA_CHAT_PROFILE`·`CLOVA_RERANK_URL`은 `.env`에 없어도 됩니다 —
+`agent.py`에 기본값이 있습니다.
+
+`.env`는 `agent.py`와 **같은 폴더**에 두세요 (agent.py가 자기 파일 위치 기준으로 읽습니다).
+
+서버에서 키가 다 들어왔는지 값 노출 없이 확인:
+
+```bash
+grep -oE "^[A-Z_]+=" .env | tr -d '=' | sort
+```
+
+`CLOVA_API_KEY`·`CLOVA_CHAT_REQUEST_ID`·`CLOVA_RERANK_REQUEST_ID`·`CLOVA_EMBED_URL`·
+`CLOVA_EMBED_REQUEST_ID`·`CLOVA_EMBED_AUTH` 6개가 반드시 보여야 합니다.
 
 ### 옮겨야 할 데이터 — 4개뿐입니다
 
@@ -63,6 +96,16 @@ pip install -r requirements.txt
 
 합계 **약 391MB**. `emb_cache.sqlite`는 임베딩을 다시 만들 때 쓰는 캐시라
 `embed_and_index.py`만 봅니다 — 서버 코드에서는 열지 않습니다.
+
+> ⚠️ **인덱스 최신본인지 먼저 확인하세요.** 2026-08-31에 제도 청크를 재청킹본
+> 760개로 교체하면서 Chroma와 BM25를 다시 만들었습니다. 그 이전에 만들어 둔
+> 압축본을 올리면 서버만 옛날 색인으로 답하게 됩니다.
+>
+> ```bash
+> ls -l dataset/bm25.pkl dataset/chunks_final.jsonl
+> ```
+>
+> 두 파일의 수정 시각이 08-31 이후여야 합니다.
 
 ```bash
 # 로컬에서
