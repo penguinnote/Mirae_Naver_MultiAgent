@@ -45,10 +45,11 @@ echo "  ✅ 정답지·실행결과 추적 안 됨"
 
 # 위 검사는 이름 "앞"만 본다. base_with_gold_*.json / result_with_gold_*.csv 처럼
 # gold가 중간에 낀 파생물이 전부 빠져나갔다. 위치를 가리지 않고 다시 본다.
-# 아래 3개는 gold 파일을 "인자로 읽는" 스크립트일 뿐 파일 안에 정답 문자열이
-# 없다(AST로 문자열 리터럴까지 확인함). 이름에 gold가 들어갈 뿐이라 예외로 둔다.
-# 새 파일을 여기 추가할 때는 반드시 내용을 먼저 열어보고 넣을 것.
 unlock
+# 이 3개는 2026-09-01에 내용을 확인했다. gold_answer/answer_points가
+# 나오는 자리는 전부 딕셔너리 키이고, 정답 문자열은 파일에 없다.
+# 스크립트를 수정하면 이 확인은 무효다. 다시 열어보고 판단해라.
+# 마감 후에는 파일명에서 gold를 빼는 개명으로 이 예외를 없앨 것.
 GOLD_OK='make_raw_from_gold.py
 merge_eval_result_with_gold_v4.py
 merge_v5_result_with_gold.py'
