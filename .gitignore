@@ -31,12 +31,10 @@ dataset/*.NEW.jsonl
 # ── 평가 실행 결과 (매번 달라짐) ──────────────────────────
 base.json
 round*.json
-v1_run*.json
-v2_run*.json
-v1_after*.json
-v2_after*.json
-v1_ch*.json
-v2_ch*.json
+# 평가 실행 산출물은 이름을 하나씩 막다 계속 샜다. v1_/v2_ 접두어로 통째로
+# 막는다. evalset_v1.json·evalset_v2.json은 접두어가 달라 안 걸린다(확인함).
+v1_*.json
+v2_*.json
 *.zip
 *.log
 
