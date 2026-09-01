@@ -45,10 +45,14 @@ echo "  ✅ 정답지·실행결과 추적 안 됨"
 
 # 위 검사는 이름 "앞"만 본다. base_with_gold_*.json / result_with_gold_*.csv 처럼
 # gold가 중간에 낀 파생물이 전부 빠져나갔다. 위치를 가리지 않고 다시 본다.
-# make_raw_from_gold.py 는 gold 파일을 인자로 읽는 실행 스크립트일 뿐
-# 파일 안에 정답 문자열이 없어 예외로 둔다. (질문·question_id만 읽는다)
+# 아래 3개는 gold 파일을 "인자로 읽는" 스크립트일 뿐 파일 안에 정답 문자열이
+# 없다(AST로 문자열 리터럴까지 확인함). 이름에 gold가 들어갈 뿐이라 예외로 둔다.
+# 새 파일을 여기 추가할 때는 반드시 내용을 먼저 열어보고 넣을 것.
 unlock
-LEAK2=$(git ls-files | grep -i 'gold' | grep -vxF 'make_raw_from_gold.py')
+GOLD_OK='make_raw_from_gold.py
+merge_eval_result_with_gold_v4.py
+merge_v5_result_with_gold.py'
+LEAK2=$(git ls-files | grep -i 'gold' | grep -vxF "$GOLD_OK")
 [ -z "$LEAK2" ] || { printf '%s\n' "$LEAK2"; die "이름에 gold가 든 파일이 추적되고 있습니다."; }
 echo "  ✅ gold 파생 파일 추적 안 됨"
 
