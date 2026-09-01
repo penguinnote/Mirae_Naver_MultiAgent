@@ -961,25 +961,14 @@ class Retriever:
         self.md_of = {m["chunk_id"]: m for m in self.meta}
 
         # 펀드 비교 질문 감지용 색인 — fund_code별 청크 인덱스, 계열 뿌리별 그룹
-        #
-        # finalize가 2개 이상 문서 공유 청크를 '공통'으로 병합하면서
-        # fund_code를 지우고 doc_ids에만 원래 펀드코드를 남긴다. 쌍둥이
-        # 문서(같은 펀드의 코드 2~3개)는 청크가 전부 공통이 되어 fund_code
-        # 기준으로 0건인 펀드가 16개다(실측 2026-09-01). 그래서 fund_code뿐
-        # 아니라 doc_ids의 모든 펀드코드에도 등록한다. 한 청크가 여러 펀드에
-        # 걸릴 수 있다. 이름은 라벨이 살아 있는 청크에서만 얻는다(공통 청크는
-        # fund_name도 None이라 setdefault에 넣으면 진짜 이름을 가린다).
         self.chunks_by_fund: dict = {}
         fund_names: dict = {}
         for i, m in enumerate(self.meta):
             fc = m.get("fund_code")
-            if fc:
-                fund_names.setdefault(fc, m.get("fund_name"))
-            codes = {fc} if fc else set()
-            codes.update(d for d in (m.get("doc_ids") or [])
-                         if isinstance(d, str) and d.startswith("KR"))
-            for c in codes:
-                self.chunks_by_fund.setdefault(c, []).append(i)
+            if not fc:
+                continue
+            self.chunks_by_fund.setdefault(fc, []).append(i)
+            fund_names.setdefault(fc, m.get("fund_name"))
         self.fund_core_index: dict = {}
         for fc, name in fund_names.items():
             core = _fund_core(name).replace("미래에셋", "")
@@ -1165,26 +1154,13 @@ class Retriever:
 
         picked: dict[str, dict] = {}
         try:
-            # where={"fund_code": ...}는 완전일치라 공통 청크(fund_code가
-            # 지워지고 doc_ids에만 코드가 남은 것)를 후보에서 아예 빼버린다.
-            # Chroma 메타데이터 필터는 부분일치를 못 하므로 서버측 필터 없이
-            # 넉넉히 받아 _fuse와 같은 matches()로 파이썬에서 거른다.
-            # (Chroma의 doc_ids는 ",코드,코드," 문자열이라 그대로 넣으면 된다)
-            res = self.col.query(query_embeddings=[query_emb],
-                                  n_results=POOL * 4,
+            res = self.col.query(query_embeddings=[query_emb], n_results=k,
+                                  where={"fund_code": fund_code},
                                   include=["metadatas"])
-            n = 0
-            for cid, md in zip(res["ids"][0], res["metadatas"][0]):
-                if not matches(md, fund_code, None, None):
-                    continue
-                n += 1
-                # 순위는 전체가 아니라 펀드 내 순번으로 매긴다. 예전 where=
-                # 방식과 같은 눈금이어야 BM25와의 RRF 합산이 안 바뀐다.
-                picked.setdefault(cid, {})["vec"] = n
-                if n >= k:
-                    break
+            for i, cid in enumerate(res["ids"][0]):
+                picked.setdefault(cid, {})["vec"] = i + 1
         except Exception:                                  # noqa: BLE001
-            pass  # Chroma 조회가 실패하면 BM25만으로도 충분하다
+            pass  # Chroma where 필터가 안 먹으면 BM25만으로도 충분하다
 
         scores = self.bm25.get_scores(tokenize(question))
         ranked = sorted(idxs, key=lambda i: -scores[i])[:k]
