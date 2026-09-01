@@ -33,6 +33,8 @@ base.json
 round*.json
 v1_run*.json
 v2_run*.json
+v1_after*.json
+v2_after*.json
 *.zip
 *.log
 
