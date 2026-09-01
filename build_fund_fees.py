@@ -119,6 +119,15 @@ def find_fee_tables(text: str):
         anchor_cells = cells(lines[i])
         # "클래스"만 있어도 앵커로 인정한다 — "종류"가 다음 줄로 밀려나는 경우가 있다.
         class_col = next((k for k, v in enumerate(anchor_cells) if "클래스" in norm_header(v)), None)
+        # 2부 13절 "보수 및 비용" 내역표는 헤더가 "클래스"가 아니라 "종류"다
+        # (실측: KR5127420034 p.25 — C-P 0.471 등 연금 클래스가 이 표에만 있다).
+        # "종류"는 흔한 단어라 셀 전체가 정확히 "종류"일 때만 앵커로 본다.
+        # 이 표의 행 라벨은 괄호 없는 코드("C-P")라 bare_codes로 표시해 둔다.
+        bare_codes = False
+        if class_col is None:
+            class_col = next((k for k, v in enumerate(anchor_cells)
+                              if norm_header(v) == "종류"), None)
+            bare_codes = class_col is not None
         if class_col is None:
             i += 1
             continue
@@ -155,9 +164,14 @@ def find_fee_tables(text: str):
         # fee_total_col으로 잘못 잡혔고, 같은 펀드의 총보수가 표마다 0.30/0.34로
         # 어긋나는 원인이었다.)
         def _pick_fee_total_col(text_list):
+            # "판매수수료 총 보수 판매보수"처럼 여러 컬럼 제목이 한 셀에 뭉개진
+            # 열은 제외한다. 실측(KR5194450018 p.5): 이 열이 fee_total로 잡혀
+            # 판매수수료율("납입금액의 1% 이내"→1.0)이 총보수로 실렸다 —
+            # 진짜 총보수 열(다음 헤더 줄의 "총 보수")은 그 옆에 따로 있다.
             return next(
                 (k for k, m in enumerate(text_list)
-                 if k != class_col and "총보수" in m and "동종유형" not in seen_n[k] and "비용" not in m),
+                 if k != class_col and "총보수" in m and "동종유형" not in seen_n[k]
+                 and "판매수수료" not in seen_n[k] and "비용" not in m),
                 None)
 
         fee_total_col = _pick_fee_total_col(merged_n)
@@ -187,7 +201,8 @@ def find_fee_tables(text: str):
 
         colmap = dict(class_col=class_col, front_load_col=front_load_col,
                       fee_total_col=fee_total_col, distribution_col=distribution_col,
-                      peer_avg_col=peer_avg_col, total_cost_col=total_cost_col)
+                      peer_avg_col=peer_avg_col, total_cost_col=total_cost_col,
+                      bare_codes=bare_codes)
 
         # ── 데이터 행: 숫자가 있으면 새 행, 라벨만 있고 숫자가 없으면 직전 행 라벨에 이어붙인다
         data_rows: list[list[str]] = []
@@ -203,7 +218,10 @@ def find_fee_tables(text: str):
             n_numeric = sum(1 for x in c if is_numeric_cell(x))
             row_label = _row_label(c, class_col)
             prev_label = data_rows[-1][class_col] if data_rows else ""
-            prev_complete = bool(re.search(r"[)）]\s*$", prev_label))
+            # '종류' 내역표의 라벨은 한 셀짜리 코드라 항상 완결이다. 이어붙이면
+            # 표 아래 '지급'/'시기' 줄이 마지막 클래스 코드에 달라붙는다
+            # (실측: 'S-퇴직'이 'S-퇴직지급시기'가 됨).
+            prev_complete = bare_codes or bool(re.search(r"[)）]\s*$", prev_label))
             if n_numeric >= 1:
                 # 들여쓰기가 행마다 달라 라벨이 헤더가 잡은 class_col이 아니라
                 # 한 칸 옆에 찍히는 경우가 있다(같은 표 안에서도 행마다 다름).
@@ -241,6 +259,134 @@ def find_fee_tables(text: str):
         i = k if k > i else i + 1
 
     return tables
+
+
+# ── 요약정보(제1부 앞머리) 표가 텍스트로 풀린 레이아웃 ─────────────────────
+#
+# PDF에 따라 4~5쪽 요약표가 마크다운 표가 아니라 평문으로 뽑힌다. 행 하나가
+# 세 줄로 쪼개진다: 라벨 위쪽 조각 / 숫자 줄 / 라벨 아래쪽 조각(클래스 코드 포함).
+#
+#     수수료선취- 납입금액의
+#     0.383 0.203 0.340 0.383 69 110 153 245 516
+#     오프라인(A) 0.30%이내
+#
+# 숫자 줄의 열 순서는 확정돼 있다(2026-09-01, 우리나라초단기채권 p.5로 검증):
+#     [총보수] [판매보수] [동종유형 총보수] [총보수·비용(합성)] | 1년 2년 3년 5년 10년
+# 앞 4개가 보수율(%), 뒤 5개는 1,000만원 투자시 기간별 총비용(천원)이라 버린다.
+# 뒤 5개를 보수율로 실으면 안 된다 — 그게 배포 서버 환각의 원인이었다.
+#
+# 인식 규칙: 줄 끝에서부터 숫자·대시 토큰 run이 9개 이상이고, 마지막 5개는
+# 정수(비용, 소수점 없음), 그 앞 4개는 0~10 사이 소수(요율) 또는 '-'여야 한다.
+# 투자실적추이(숫자 5개)나 포트폴리오 표는 이 구조가 아니라서 걸리지 않는다.
+# 클래스 코드가 괄호로 확인된 행만 싣는다 — 코드 없는 숫자 줄은 오인식 위험이
+# 커서 버린다.
+
+# 요율에 %를 붙이는 문서가 있다(실측: 베어링 고배당 "1.434% 0.700% …" —
+# % 때문에 fee 줄로 인식되지 않아 펀드가 통째로 빠졌다). parse_num이 %를 벗긴다.
+_NUMTOK_RE = re.compile(r"^\d[\d,]*(?:\.\d+)?%?$")
+_SUMMARY_CODE_RE = re.compile(r"[(（]([A-Za-z][A-Za-z0-9]{0,3}(?:-[A-Za-z0-9가-힣]{1,6})?)[)）]")
+_LABEL_HINTS = ("수수료", "미징구", "선취", "후취", "오프라인", "온라인", "퇴직", "연금")
+_NOTE_RE = re.compile(r"^[(（]?주\d|^※")
+
+
+def _numeric_tail(tokens: list[str]) -> list[str]:
+    run = []
+    for t in reversed(tokens):
+        if t == "-" or _NUMTOK_RE.match(t):
+            run.append(t)
+        else:
+            break
+    return list(reversed(run))
+
+
+def _is_cost_tok(t: str) -> bool:
+    return t == "-" or (bool(_NUMTOK_RE.match(t)) and "." not in t)
+
+
+def _is_rate_tok(t: str) -> bool:
+    if t == "-":
+        return True
+    if "." not in t:
+        return False
+    v = parse_num(t)
+    return v is not None and 0 <= v <= 10
+
+
+def find_summary_fee_rows(text: str) -> list[dict]:
+    """요약표 텍스트 레이아웃에서 (라벨, 코드, 요율 4종) 행들을 뽑는다."""
+    lines = [ln.strip() for ln in text.split("\n")]
+    rows = []
+    pending: list[str] = []   # 다음 숫자 줄의 위쪽 라벨 조각
+    i = 0
+    while i < len(lines):
+        ln = lines[i]
+        toks = ln.split()
+        tail = _numeric_tail(toks)
+        is_fee_line = (len(tail) >= 9
+                       and all(_is_cost_tok(t) for t in tail[-5:])
+                       and all(_is_rate_tok(t) for t in tail[-9:-5]))
+        if not is_fee_line:
+            # 라벨 조각 후보만 pending에 쌓는다. 아무 줄이나 쌓으면 헤더 잡음이
+            # 라벨에 섞여 채널·계좌유형 추정을 오염시킨다.
+            if (toks and len(ln) <= 40 and not _NOTE_RE.match(ln)
+                    and (any(h in ln for h in _LABEL_HINTS) or _SUMMARY_CODE_RE.search(ln))):
+                pending.append(ln)
+                if len(pending) > 3:
+                    pending.pop(0)
+            else:
+                pending = []
+            i += 1
+            continue
+
+        rates = tail[-9:-5]
+        extras = tail[:-9]                       # 요율 앞의 '-' 등 — 판매수수료 자리
+        head = toks[:len(toks) - len(tail)]      # 숫자 줄 안의 라벨 조각
+        top = pending
+        pending = []
+
+        # 아래쪽 라벨 조각: 코드가 나올 때까지 최대 2줄. 다음 숫자 줄은 먹지 않는다.
+        #
+        # 코드는 반드시 숫자 줄 자신(head) 또는 아래쪽 조각에서만 찾는다.
+        # 실제 레이아웃에서 "(A-E)" 같은 코드는 항상 숫자 줄과 같은 줄이거나
+        # 그 아래 줄에 온다. 위쪽 조각(pending)에서 찾으면, 청크 경계가 표
+        # 중간을 지날 때 앞 행의 아래쪽 조각이 chunk 첫머리에 남아 **앞 행의
+        # 코드가 다음 행에 붙는다** (실측: KR5111420047 p5_0009 오버랩 청크에서
+        # A-E가 C-E의 0.1303을 가져갔다). 채널·계좌유형 추정도 같은 이유로
+        # own(head+bottom)을 먼저 보고, 거기 없을 때만 위쪽 조각까지 본다.
+        own_parts = list(head)
+        j = i + 1
+        consumed = 0
+        while (_SUMMARY_CODE_RE.search(re.sub(r"\s+", "", "".join(own_parts)) or "") is None
+               and j < len(lines) and consumed < 2):
+            nxt = lines[j]
+            ntoks = nxt.split()
+            if not ntoks or len(nxt) > 40 or _NOTE_RE.match(nxt):
+                break
+            if len(_numeric_tail(ntoks)) >= 9:
+                break
+            own_parts.append(nxt)
+            j += 1
+            consumed += 1
+
+        own = " ".join(own_parts).strip()
+        label = " ".join(top + own_parts).strip()
+        m = _SUMMARY_CODE_RE.search(re.sub(r"\s+", "", own))
+        if m:
+            front = None
+            if "없음" in toks or any("없음" in x for x in own_parts):
+                front = "없음"
+            elif any(t == "-" for t in extras):
+                front = "-"
+            rows.append(dict(
+                label=label, code=m.group(1), front_load_text=front,
+                own_label=own,
+                fee_total=parse_num(rates[0]),
+                fee_distribution=parse_num(rates[1]),
+                fee_peer_avg=parse_num(rates[2]),
+                fee_total_cost=parse_num(rates[3]),
+            ))
+        i = j if j > i + 1 else i + 1
+    return rows
 
 
 CLASS_LABEL_RE = re.compile(r"[(（]([A-Za-z0-9가-힣\-]+)[)）]\s*$")
@@ -303,7 +449,7 @@ def infer_account_type(label: str, code: str | None) -> str | None:
     return None
 
 
-def infer_channel(label: str) -> str | None:
+def infer_channel(label: str, code: str | None = None) -> str | None:
     label_n = re.sub(r"\s+", "", label)
     if "온라인슈퍼" in label_n:
         return "온라인슈퍼"
@@ -311,6 +457,22 @@ def infer_channel(label: str) -> str | None:
         return "온라인"
     if "오프라인" in label_n:
         return "오프라인"
+    # 2부 내역표('종류' 앵커)는 라벨이 맨 코드라 채널 단어가 없다. 이때는
+    # 투자설명서 자체에 명시된 클래스 명명 관례로 보충한다(예: 종류S-P
+    # "수수료미징구-온라인슈퍼-개인연금", 종류C-Pe "수수료미징구-온라인-개인연금",
+    # 종류C-P "수수료미징구-오프라인-개인연금").
+    #   S로 시작   → 온라인슈퍼
+    #   e로 끝남   → 온라인
+    #   연금 클래스(P·P2로 끝남)의 무표기 → 오프라인
+    # 연금 클래스가 아닌 무표기 코드(C1·W·F 등)는 채널 개념이 달라 건드리지 않는다.
+    if code:
+        c = code.upper().replace("-", "")
+        if c.startswith("S"):
+            return "온라인슈퍼"
+        if c.endswith("E"):
+            return "온라인"
+        if c.endswith("P") or c.endswith("P2"):
+            return "오프라인"
     return None
 
 
@@ -328,56 +490,123 @@ def main() -> None:
     skipped = []
     seen_funds_with_rows = set()
     candidate_chunks = 0
+    restored_identity = 0     # doc_ids로 신원을 복원한 행 수
+    summary_rows = 0          # 요약표 텍스트 레이아웃에서 나온 행 수
+    wide_shared = set()       # 4개 이상 문서가 공유하는데 행이 나온 청크 — 눈으로 확인용
+
+    # finalize가 공통 청크의 fund_code·fund_name을 지우므로(설계 의도),
+    # 코드→이름 사전은 추적 중인 manifest.csv에서 가져온다. 이게 없으면
+    # 쌍둥이 문서 펀드 16종의 보수 행이 전부 NULL 신원으로 남는다.
+    manifest = {}
+    mpath = Path(a.inp).parent / "manifest.csv"
+    if mpath.exists():
+        with open(mpath, encoding="utf-8-sig") as mf:
+            for mr in csv.DictReader(mf):
+                if mr.get("fund_code"):
+                    manifest[mr["fund_code"]] = (mr.get("fund_name") or None,
+                                                 mr.get("base_date") or None)
 
     with open(a.inp, encoding="utf-8") as f:
         for line in f:
             r = json.loads(line)
-            if r.get("content_type") != "table":
-                continue
             text = r["text"]
-            if "클래스" not in text or "총보수" not in text:
+            # "총 보수"처럼 셀 안에서 공백이 낀 표기가 흔하다(실측: KR5127420034
+            # p.25 내역표가 이 이유로 후보에서 탈락했다). 공백을 지우고 본다 —
+            # 후보가 늘기만 하는 방향이라 기존에 잡히던 청크는 그대로 잡힌다.
+            tn = re.sub(r"\s+", "", text)
+            if "총보수" not in tn:
+                continue
+            # '클래스'가 없는 청크도 요약표 데이터 행(수수료선취-/수수료미징구-)이나
+            # '종류' 앵커 내역표일 수 있다(청크 경계에서 헤더가 앞 청크로 잘림).
+            # 다만 무작정 열면 후보가 폭증하니 보수표 고유 표지로만 넓힌다.
+            if not any(k in tn for k in ("클래스", "수수료선취", "수수료미징구", "지급비율")):
                 continue
             candidate_chunks += 1
-            tables = find_fee_tables(text)
-            if not tables:
+
+            # (라벨, 코드, 요율)만 먼저 뽑고, 신원(fund_code)은 아래에서 한 번에 붙인다.
+            parsed = []
+            if r.get("content_type") == "table":
+                for colmap, data_rows in find_fee_tables(text):
+                    for c in data_rows:
+                        label = c[colmap["class_col"]]
+                        code = parse_class_code(label)
+                        if code is None and colmap.get("bare_codes"):
+                            # '종류' 내역표의 라벨은 괄호 없는 코드 그 자체다("C-P").
+                            lab = re.sub(r"\s+", "", label)
+                            if re.fullmatch(r"[A-Za-z][A-Za-z0-9]{0,3}(?:-[A-Za-z0-9가-힣]{1,6})?", lab):
+                                code = lab
+                        # 코드 없는 행도 버리지 않는다 — "운용전환일부터 해지일까지"
+                        # 같은 기간 분할 행이 실데이터다(실측: KR5147430065 0.140%).
+                        # '지급'/'시기' 각주 줄은 fee_total이 숫자가 아니라서
+                        # 아래 0~10 필터가 알아서 거른다.
+                        def get(col_key):
+                            idx = colmap[col_key]
+                            if idx is None or idx >= len(c):
+                                return None
+                            return c[idx]
+                        parsed.append(dict(
+                            label=label, code=code,
+                            front_load_text=get("front_load_col"),
+                            fee_total=parse_num(get("fee_total_col")),
+                            fee_distribution=parse_num(get("distribution_col")),
+                            fee_peer_avg=parse_num(get("peer_avg_col")),
+                            fee_total_cost=parse_num(get("total_cost_col")),
+                        ))
+            n_table_rows = len(parsed)
+            for sr in find_summary_fee_rows(text):
+                # 채널·계좌유형은 own(자기 행 조각)에서 먼저 찾는다 — 위쪽 조각은
+                # 오버랩 청크에서 앞 행의 것일 수 있다(find_summary_fee_rows 주석 참조).
+                own = sr.pop("own_label", "") or sr["label"]
+                sr["_ch"] = infer_channel(own, sr["code"]) or infer_channel(sr["label"], sr["code"])
+                sr["_at"] = infer_account_type(own, sr["code"]) or infer_account_type(sr["label"], sr["code"])
+                parsed.append(sr)
+            summary_rows += len(parsed) - n_table_rows
+
+            if not parsed:
                 skipped.append((r.get("chunk_id"), r.get("fund_code"), r.get("fund_name")))
                 continue
 
-            for colmap, data_rows in tables:
-                for c in data_rows:
-                    label = c[colmap["class_col"]]
-                    code = parse_class_code(label)
+            # ── 신원 복원: 공통 청크(fund_code=None)는 doc_ids의 코드마다 행을 만든다.
+            # 같은 표가 두 문서에 실렸다는 뜻이고 실제로 두 펀드의 보수가 동일하다.
+            if r.get("fund_code"):
+                idents = [(r.get("fund_code"), r.get("fund_name"), r.get("base_date"))]
+            else:
+                kr = [d for d in (r.get("doc_ids") or [])
+                      if isinstance(d, str) and d.startswith("KR")]
+                idents = [(d,
+                           manifest.get(d, (None, None))[0],
+                           r.get("base_date") or manifest.get(d, (None, None))[1])
+                          for d in kr]
+                if len(kr) >= 4:
+                    wide_shared.add((r.get("chunk_id"), len(kr)))
+                if not idents:
+                    skipped.append((r.get("chunk_id"), None, None))
+                    continue
 
-                    def get(col_key):
-                        idx = colmap[col_key]
-                        if idx is None or idx >= len(c):
-                            return None
-                        return c[idx]
-
-                    row = dict(
-                        fund_code=r.get("fund_code"),
-                        fund_name=r.get("fund_name"),
-                        base_date=r.get("base_date"),
-                        class_label=label,
-                        class_code=code,
-                        account_type=infer_account_type(label, code),
-                        channel=infer_channel(label),
-                        front_load_text=get("front_load_col"),
-                        fee_total=parse_num(get("fee_total_col")),
-                        fee_distribution=parse_num(get("distribution_col")),
-                        fee_peer_avg=parse_num(get("peer_avg_col")),
-                        fee_total_cost=parse_num(get("total_cost_col")),
+            for pr in parsed:
+                # 총보수는 항상 %(0~10 사이)다. 표 열이 잘못 잡혀 "1,000만원 투자시
+                # 비용"(천원 단위, 수십~수백) 같은 다른 컬럼 값이 들어온 경우를 걸러낸다.
+                if pr["fee_total"] is None or not (0 <= pr["fee_total"] <= 10):
+                    continue
+                for fc, fn, bd in idents:
+                    rows_out.append(dict(
+                        fund_code=fc, fund_name=fn, base_date=bd,
+                        class_label=pr["label"], class_code=pr["code"],
+                        account_type=pr.get("_at", infer_account_type(pr["label"], pr["code"])) if "_at" in pr else infer_account_type(pr["label"], pr["code"]),
+                        channel=pr.get("_ch") if "_ch" in pr else infer_channel(pr["label"], pr["code"]),
+                        front_load_text=pr["front_load_text"],
+                        fee_total=pr["fee_total"],
+                        fee_distribution=pr["fee_distribution"],
+                        fee_peer_avg=pr["fee_peer_avg"],
+                        fee_total_cost=pr["fee_total_cost"],
                         chunk_id=r.get("chunk_id"),
                         page=r.get("page"),
                         source_path=r.get("source_path"),
-                    )
-                    # 총보수는 항상 %(0~10 사이)다. 표 열이 잘못 잡혀 "1,000만원 투자시
-                    # 비용"(천원 단위, 수십~수백) 같은 다른 컬럼 값이 들어온 경우를 걸러낸다.
-                    if row["fee_total"] is None or not (0 <= row["fee_total"] <= 10):
-                        continue
-                    rows_out.append(row)
-                    if row["fund_code"]:
-                        seen_funds_with_rows.add(row["fund_code"])
+                    ))
+                    if fc:
+                        seen_funds_with_rows.add(fc)
+                    if fc and not r.get("fund_code"):
+                        restored_identity += 1
 
     # ── 중복 제거
     # 같은 표가 "요약정보"와 본문에 두 번 인쇄된 문서가 있어 (fund_code, class_code)가
@@ -438,13 +667,15 @@ def main() -> None:
         w.writerows(skipped)
 
     # ── 요약
-    total_funds_candidate = len({r.get("fund_code") for r in
-                                  [json.loads(l) for l in open(a.inp, encoding="utf-8")]
-                                  if r.get("content_type") == "table"
-                                  and "클래스" in r["text"] and "총보수" in r["text"]})
+    total_funds_candidate = len(manifest) if manifest else 0
     print(f"후보 청크 {candidate_chunks:,}개 중 표 인식 실패 {len(skipped):,}개")
     print(f"수수료 행 {len(rows_out):,}건 추출 → {a.db}")
-    print(f"펀드 {len(seen_funds_with_rows):,}/{total_funds_candidate:,}개에서 데이터 확보")
+    print(f"펀드 {len(seen_funds_with_rows):,}/{total_funds_candidate:,}개에서 데이터 확보 (manifest 기준)")
+    print(f"  · 요약표 텍스트 레이아웃에서 {summary_rows:,}행, 공통 청크 신원 복원 {restored_identity:,}행")
+    if wide_shared:
+        print(f"⚠️ 4개 이상 문서가 공유하는 청크에서 행이 나옴 — 법정 공통문구가 아닌지 확인 필요:")
+        for cid, n in sorted(wide_shared):
+            print(f"   {cid} (문서 {n}개)")
     if conflicts:
         print(f"\n⚠️ 같은 (펀드,클래스)인데 총보수 값이 다른 경우 {len(conflicts)}건 — 확인 필요:")
         for key, totals in conflicts[:10]:
