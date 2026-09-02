@@ -2642,7 +2642,17 @@ def format_sql_results(state: dict) -> str:
         for c in show:
             v = r.get(c)
             if isinstance(v, float):
-                vals.append(f"{v:.4g}")
+                # 보수율 4컬럼만 %를 붙인다 — 원문 표 헤더가 전부
+                # "(연간, 단위: %)"임을 컬럼별로 확인했다(2026-09-02).
+                # 정답지·답변은 '0.471%'처럼 %를 붙여 쓰는데 여기만 '0.471'로
+                # 인쇄돼 근거 정합성 검사가 문자열 불일치로 떨어졌다(E축).
+                # 컬럼명 완전일치로만 적용한다 — 금액·기간 등 다른 숫자
+                # 컬럼이나 별칭·계산식 컬럼에 %가 붙으면 근거가 틀린 값이 된다.
+                if c in ("fee_total", "fee_distribution",
+                         "fee_peer_avg", "fee_total_cost"):
+                    vals.append(f"{v:.4g}%")
+                else:
+                    vals.append(f"{v:.4g}")
             elif c == "class_label" and isinstance(v, str):
                 vals.append(_clean_label(v))
             else:
