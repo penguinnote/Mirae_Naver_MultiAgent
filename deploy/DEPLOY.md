@@ -51,25 +51,34 @@ pip install -r requirements.txt
 `.env`는 git에 올라가지 않으므로(`.gitignore`) **직접 서버에 옮겨야 합니다.**
 
 **로컬 `.env`를 scp로 그대로 복사하세요. `.env.example`을 보고 새로 만들지 마세요.**
-`.env.example`에는 `CLOVA_CHAT_REQUEST_ID`와 `CLOVA_RERANK_REQUEST_ID`가 빠져 있습니다.
-새로 만들면 이 둘이 없는 채로 뜨고, HCX 답변 생성과 리랭커 호출이 서비스 앱이 아니라
-**테스트 앱 한도로 처리됩니다.** 평가 기간 중 호출이 막히는 경로입니다.
+`.env.example`을 보고 만들면 서비스 앱 식별자를 빠뜨리기 쉽고, 그러면 HCX 호출이
+서비스 앱이 아니라 **테스트 앱 한도로 처리됩니다.** 평가 기간 중 호출이 막히는 경로입니다.
 
-운영에 필요한 키는 8종입니다.
+서버 런타임에 필요한 키는 **5종뿐**입니다.
 
-| 키 | 쓰는 곳 |
+| 키 | 쓰는 곳 | 읽는 파일 |
+|---|---|---|
+| `CLOVA_API_KEY` | HCX 생성 + 질의 임베딩 | `agent.py`, `search.py` |
+| `CLOVA_CHAT_REQUEST_ID` | HCX-007 서비스 앱 식별 | `agent.py` |
+| `CLOVA_EMBED_URL` | 질의 임베딩 엔드포인트 | `embed_and_index.py` |
+| `CLOVA_EMBED_REQUEST_ID` | 임베딩 서비스 앱 식별 | 〃 |
+| `CLOVA_EMBED_AUTH` | 인증 헤더 방식(bearer/ncp) | 〃 |
+
+`search.py`가 질의를 임베딩할 때 `embed_and_index.ClovaEmbedder`를 임포트하므로,
+겉보기와 달리 **`CLOVA_EMBED_*` 세 개가 질의마다 필요합니다.**
+
+**서버에 두지 않아도 되는 키** — 넣어도 무해하지만 노출 표면만 넓힙니다.
+
+| 키 | 이유 |
 |---|---|
-| `CLOVA_API_KEY` | 전 구간 공통 |
-| `CLOVA_CHAT_REQUEST_ID` | HCX-007 답변 생성 · Text2SQL |
-| `CLOVA_RERANK_REQUEST_ID` | 리랭커 |
-| `CLOVA_EMBED_URL` · `CLOVA_EMBED_REQUEST_ID` · `CLOVA_EMBED_AUTH` | 질의 임베딩 |
-| `CLOVA_OCR_URL` · `CLOVA_OCR_SECRET` | 인덱스 구축 전용 — 서버 런타임에는 안 씁니다 |
+| `CLOVA_OCR_URL` · `CLOVA_OCR_SECRET` | `build_dataset.py` 전용. 인덱스 구축 1회성 |
+| `CLOVA_RERANK_REQUEST_ID` | `search.py --rerank` CLI 전용. **`agent.py`에 리랭커 호출이 0건**이라 파이프라인에서 안 씁니다 |
 
-`X-NCP-CLOVASTUDIO-REQUEST-ID`는 임베딩·리랭커·HCX가 **각각 다른 값**입니다.
+`X-NCP-CLOVASTUDIO-REQUEST-ID`는 임베딩과 HCX가 **각각 다른 값**입니다.
 섞어 쓰면 엉뚱한 서비스 앱 한도로 처리됩니다.
 
-`CLOVA_CHAT_URL`·`CLOVA_CHAT_PROFILE`·`CLOVA_RERANK_URL`은 `.env`에 없어도 됩니다 —
-`agent.py`에 기본값이 있습니다.
+`CLOVA_CHAT_URL`·`CLOVA_CHAT_PROFILE`은 `.env`에 없어도 됩니다 — `agent.py`에
+기본값이 있습니다.
 
 `.env`는 `agent.py`와 **같은 폴더**에 두세요 (agent.py가 자기 파일 위치 기준으로 읽습니다).
 
@@ -79,8 +88,9 @@ pip install -r requirements.txt
 grep -oE "^[A-Z_]+=" .env | tr -d '=' | sort
 ```
 
-`CLOVA_API_KEY`·`CLOVA_CHAT_REQUEST_ID`·`CLOVA_RERANK_REQUEST_ID`·`CLOVA_EMBED_URL`·
-`CLOVA_EMBED_REQUEST_ID`·`CLOVA_EMBED_AUTH` 6개가 반드시 보여야 합니다.
+`CLOVA_API_KEY`·`CLOVA_CHAT_REQUEST_ID`·`CLOVA_EMBED_URL`·`CLOVA_EMBED_REQUEST_ID`·
+`CLOVA_EMBED_AUTH` **5개**가 반드시 보여야 합니다. 더 있어도 동작하지만,
+위 '서버에 두지 않아도 되는 키'는 빼는 편이 낫습니다.
 
 ### 옮겨야 할 데이터 — 4개뿐입니다
 
