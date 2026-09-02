@@ -1391,11 +1391,7 @@ CREATE TABLE fund_fees (
 
 ■ 실제 값 (이 값만 사용하십시오 — 다른 리터럴을 지어내지 마십시오):
   class_code 전체 목록 (클래스 조건은 이 컬럼으로 거십시오):
-      A, A-E, A-e, A-u, A-u2, A1, A2, A2e, AG, Ae, B, B-e,
-      C, C-E, C-F, C-H, C-I, C-I2, C-P, C-P1, C-P1e, C-P2, C-P2e,
-      C-Pe, C-Pe1, C-Pe2, C-R, C-RP, C-RPe, C-Re, C-W, C-e, C-g, C-i,
-      C1, C2, C3, C4, CG, Ce, Cf, Cf-RP, Ci-RP, Cw,
-      J-Pe, J-RPe, J-e, R, R-A, S, S-P, S-P2, S-RP, Sp
+__CLASS_CODE_LIST__
       ※ 표기가 펀드마다 흔들립니다('Ae' / 'A-e' / 'A-E'가 모두 존재).
         하이픈·대소문자는 조회할 때 자동으로 흡수되므로, 사용자가 말한
         표기를 그대로 쓰면 됩니다. 어느 쪽인지 고민하지 마십시오.
@@ -1839,6 +1835,34 @@ _SHORTHAND_STRIP_RE = re.compile(
     r"(증권자?투자신탁|증권투자신탁|증권투자회사|전환형자?투자신탁|제\d호|\(.*?\)|\[.*?\]|\s+)")
 
 
+# 라벨 줄나눔으로 코드 문자열에 끼어드는 잡음 토큰. infer_account_type
+# (build_fund_fees.py)과 같은 집합이다 — 실측: 'C-없음e'(원래 C-e) 1건.
+_SPLICE_TOKENS = ("없음", "투자비용")
+
+
+def _text2sql_prompt() -> str:
+    """TEXT2SQL_PROMPT의 class_code 목록을 DB 실제 값으로 채워 돌려준다.
+
+    실측 근거(H3-11, 2026-09-02): 목록이 정적 텍스트였을 때 fund_fees
+    재빌드(76→100펀드)로 생긴 'S-퇴직'이 목록에 없어서, HCX가 "이 값만
+    사용하라"는 지시대로 가장 비슷한 'S-RP'를 골랐고 S-퇴직 0.25를 놓친 채
+    "둘 다 0.26%"라고 틀리게 단정했다. DB가 바뀌면 목록도 따라가야 한다.
+    스플라이스 잡음 코드('C-없음e')만 목록에서 거른다 — 'S-퇴직'·'C-퇴직e'
+    같은 한글 섞인 코드는 실제 클래스이므로 걸러선 안 된다.
+    """
+    codes = sorted(c for c in _class_codes()[0]
+                   if not any(t in c for t in _SPLICE_TOKENS))
+    lines, cur = [], []
+    for c in codes:
+        cur.append(c)
+        if len(", ".join(cur)) > 58:
+            lines.append("      " + ", ".join(cur) + ",")
+            cur = []
+    if cur:
+        lines.append("      " + ", ".join(cur))
+    return TEXT2SQL_PROMPT.replace("__CLASS_CODE_LIST__", "\n".join(lines))
+
+
 def _class_codes():
     """class_code 전체 목록을 (전체, 2글자 이상만, 정규식 alternation)으로
     캐시한다. DB에서 한 번만 읽는다.
@@ -2244,7 +2268,7 @@ def fee_sql(state: dict) -> dict:
     raw_sql = ""
 
     messages = [
-        {"role": "system", "content": TEXT2SQL_PROMPT},
+        {"role": "system", "content": _text2sql_prompt()},
         {"role": "user", "content": q},
     ]
 
@@ -2389,7 +2413,7 @@ def fee_sql(state: dict) -> dict:
             if attempt == 0:
                 # 에러 메시지를 피드백으로 포함해 1회 재시도
                 messages = [
-                    {"role": "system", "content": TEXT2SQL_PROMPT},
+                    {"role": "system", "content": _text2sql_prompt()},
                     {"role": "user", "content": q},
                     {"role": "assistant", "content": raw_sql},
                     {"role": "user",
