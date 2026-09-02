@@ -436,11 +436,19 @@ def parse_num(s: str) -> float | None:
 
 
 def infer_account_type(label: str, code: str | None) -> str | None:
-    label_n = re.sub(r"\s+", "", label)
+    # 판매수수료 칸의 '없음'과 그룹 제목 '투자비용'이 줄나눔 탓에 라벨
+    # 한가운데 끼어 '퇴 없음 직연금'·'퇴 투자비용 직연금'처럼 단어를 쪼개는
+    # 행이 실측 2건 있다(C-e). 의미 없는 토큰이니 지우고 나서 본다.
+    label_n = re.sub(r"\s+", "", label).replace("없음", "").replace("투자비용", "")
     if "퇴직연금" in label_n:
         return "퇴직연금"
     if "연금저축" in label_n or "개인연금" in label_n:
         return "연금저축"
+    # 'S-퇴직'·'C-퇴직e'처럼 코드가 곧 라벨인 행(2부 내역표)은 '퇴직연금'
+    # 완전일치가 안 잡힌다. 보수표 라벨에서 '퇴직'은 퇴직연금뿐이라(실측)
+    # 부분일치로 보완한다 — 홀드아웃 H3-11이 이 4행 때문에 50%에 막혔다.
+    if "퇴직" in label_n:
+        return "퇴직연금"
     if code:
         c = code.upper().replace("-", "")
         for k, v in CODE_ACCOUNT_HINTS.items():
