@@ -1799,8 +1799,9 @@ def _fill_or_groups(sql: str, rows: list, state: dict) -> tuple:
 
         relaxed = _relax_fund_name(sub)
         if relaxed:
-            # 본경로와 같은 정규화를 태운다(클래스 표기·판매경로)
-            relaxed = _normalize_channel_sql(_normalize_class_sql(relaxed))
+            # 본경로와 같은 정규화를 태운다(계좌유형 이관·클래스 표기·판매경로)
+            relaxed = _normalize_channel_sql(_normalize_class_sql(
+                _migrate_account_sql(relaxed)))
             try:
                 got = _run_sql_rows(relaxed)
             except Exception:                            # noqa: BLE001
@@ -2041,6 +2042,77 @@ def _norm_class(s: str) -> str:
     return s.strip().upper().replace("-", "").replace(" ", "")
 
 
+# ── 계좌유형 리터럴이 class_code 자리에 들어온 것을 account_type으로 이관 ──
+#
+# 실측 근거(pen-056, 2026-09-01). 질문:
+#   "KB스타 중기 국공채 펀드를 개인연금으로 가입하려는데
+#    오프라인·온라인·온라인슈퍼 클래스 각각 총보수가 얼마인가요?"
+# HCX가 만든 SQL:
+#   UPPER(REPLACE(class_code,'-','')) IN ('개인연금')
+# '개인연금'은 클래스 코드가 아니라 **계좌유형**이고 fund_fees에는 별도
+# 컬럼(account_type)이 있다. 이 조건 하나 때문에 0행이 됐고, 빼면 DB가
+# 정답 3개(C-P 0.471 / C-Pe 0.325 / S-P 0.26)를 정확히 돌려준다.
+# _channel_cond가 '온라인직접판매' 같은 존재하지 않는 리터럴을 DB 실제 값으로
+# 바꾸는 것과 같은 구조의 이관 계층이다.
+#
+# ⚠️ 판정은 정규화(하이픈·공백·대소문자 제거) 후 **완전일치**로만 한다.
+# 'S-퇴직'은 진짜 클래스 코드인데 '퇴직'을 포함한다 — 부분일치로 잡으면
+# 멀쩡한 클래스 조건이 account_type으로 이관돼 그 행을 영영 못 찾는다.
+# 부분일치로 되돌리지 말 것.
+#
+# DB 실제 값 기준 매핑만 둔다(account_type은 NULL/'연금저축'/'퇴직연금' 셋뿐):
+_ACCOUNT_LITERALS = {"개인연금": "연금저축", "연금저축": "연금저축",
+                     "퇴직연금": "퇴직연금"}
+# HCX가 정규화 표현을 직접 쓰기도 하므로 두 형태의 왼쪽 항을 다 받는다.
+_ACCT_LHS = r"(UPPER\(REPLACE\(class_code,'-',''\)\)|class_code)"
+_ACCT_EQ_RE = re.compile(_ACCT_LHS + r"\s*=\s*'([^']*)'", re.I)
+_ACCT_IN_RE = re.compile(_ACCT_LHS + r"\s+IN\s*\(([^)]*)\)", re.I)
+
+
+def _migrate_account_sql(sql: str) -> str:
+    """class_code 비교의 계좌유형 리터럴을 account_type 조건으로 옮긴다.
+
+    IN 목록에 진짜 클래스와 섞여 오면(`IN ('C-P','개인연금')`) 계좌유형만
+    빼내고 남은 클래스 리터럴은 class_code 조건에 그대로 둔다. 두 조건은
+    OR로 묶는다 — AND로 묶으면 account_type이 NULL인 일반 클래스 행이
+    통째로 사라진다(잘못 좁히면 정답을 아예 못 보고, 안 좁히면 순위만
+    밀린다는 원칙 그대로). 남는 클래스가 없으면 조건 자체를 account_type으로
+    바꾼다.
+    """
+    def _eq(m):
+        acct = _ACCOUNT_LITERALS.get(_norm_class(m.group(2)))
+        if acct is None:
+            return m.group(0)
+        return f"account_type = '{acct}'"
+
+    def _in(m):
+        lhs = m.group(1)
+        lits = re.findall(r"'([^']*)'", m.group(2))
+        accts, classes = [], []
+        for v in lits:
+            a = _ACCOUNT_LITERALS.get(_norm_class(v))
+            if a:
+                if a not in accts:
+                    accts.append(a)
+            else:
+                classes.append(v)
+        if not accts:
+            return m.group(0)
+        parts = []
+        if classes:
+            vals = ", ".join(f"'{v}'" for v in classes)
+            parts.append(f"{lhs} IN ({vals})")
+        if len(accts) == 1:
+            parts.append(f"account_type = '{accts[0]}'")
+        else:
+            parts.append("account_type IN ("
+                         + ", ".join(f"'{a}'" for a in accts) + ")")
+        return "(" + " OR ".join(parts) + ")" if len(parts) > 1 else parts[0]
+
+    out = _ACCT_IN_RE.sub(_in, sql)
+    return _ACCT_EQ_RE.sub(_eq, out)
+
+
 def _normalize_class_sql(sql: str) -> str:
     """class_code 비교를 표기 흔들림에 강하게 바꾼다.
 
@@ -2184,6 +2256,13 @@ def fee_sql(state: dict) -> dict:
             # 완화 재조회는 정규화 이전 SQL을 손봐야 한다. 정규화된 문장을
             # 다시 정규식으로 고치면 표현이 겹쳐 꼬인다.
             sql_plain = sql
+            # 계좌유형 단어가 클래스 자리에 들어왔으면 account_type으로 이관한다
+            # (클래스 정규화보다 먼저 — 정규화가 표현을 바꾸면 못 잡는다)
+            acct = _migrate_account_sql(sql)
+            if acct != sql:
+                state["trace"].append(
+                    "fee_sql: 계좌유형 리터럴을 account_type 조건으로 이관")
+                sql = acct
             # 클래스 코드 표기 흔들림은 항상 흡수한다 (위 설명 참조)
             norm = _normalize_class_sql(sql)
             if norm != sql:
@@ -2233,7 +2312,8 @@ def fee_sql(state: dict) -> dict:
                     # 조건도 있는 질문이 조용히 엉뚱한 행을 잡았다.
                     # 실측(killing camp H-08): channel='온라인'을 그대로 두면
                     # '온라인슈퍼'인 S-P2(0.15%)를 놓치고 Ae(0.195%)만 잡는다.
-                    relaxed = _normalize_channel_sql(_normalize_class_sql(relaxed))
+                    relaxed = _normalize_channel_sql(_normalize_class_sql(
+                        _migrate_account_sql(relaxed)))
                     try:
                         conn = sqlite3.connect(FUND_FEES_DB)
                         conn.row_factory = sqlite3.Row
