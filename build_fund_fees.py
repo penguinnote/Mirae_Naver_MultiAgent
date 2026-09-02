@@ -284,7 +284,10 @@ def find_fee_tables(text: str):
 # 요율에 %를 붙이는 문서가 있다(실측: 베어링 고배당 "1.434% 0.700% …" —
 # % 때문에 fee 줄로 인식되지 않아 펀드가 통째로 빠졌다). parse_num이 %를 벗긴다.
 _NUMTOK_RE = re.compile(r"^\d[\d,]*(?:\.\d+)?%?$")
-_SUMMARY_CODE_RE = re.compile(r"[(（]([A-Za-z][A-Za-z0-9]{0,3}(?:-[A-Za-z0-9가-힣]{1,6})?)[)）]")
+# 괄호 안에 계좌유형 괄호가 또 있는 "(C-P1e(연금저축))" 형태가 실측 존재
+# (KR5144420091 p.34 — 닫는 괄호만 찾으면 코드를 통째로 놓친다).
+_SUMMARY_CODE_RE = re.compile(
+    r"[(（]([A-Za-z][A-Za-z0-9]{0,3}(?:-[A-Za-z0-9가-힣]{1,6})?)[)）(（]")
 _LABEL_HINTS = ("수수료", "미징구", "선취", "후취", "오프라인", "온라인", "퇴직", "연금")
 _NOTE_RE = re.compile(r"^[(（]?주\d|^※")
 
@@ -577,7 +580,14 @@ def main() -> None:
             # ── 신원 복원: 공통 청크(fund_code=None)는 doc_ids의 코드마다 행을 만든다.
             # 같은 표가 두 문서에 실렸다는 뜻이고 실제로 두 펀드의 보수가 동일하다.
             if r.get("fund_code"):
-                idents = [(r.get("fund_code"), r.get("fund_name"), r.get("base_date"))]
+                fn = r.get("fund_name")
+                # 실측(KR5116501001): 표 머리글("명 칭 금융투자협회 펀드코드")이
+                # 펀드명으로 추출된 문서가 1건 있다. 정식 펀드명에는 반드시
+                # '투자신탁' 또는 '투자회사'가 들어가므로(100펀드 전수 확인),
+                # 그게 없으면 manifest의 이름으로 바꾼다.
+                if fn and "투자신탁" not in fn and "투자회사" not in fn:
+                    fn = manifest.get(r["fund_code"], (fn, None))[0] or fn
+                idents = [(r.get("fund_code"), fn, r.get("base_date"))]
             else:
                 kr = [d for d in (r.get("doc_ids") or [])
                       if isinstance(d, str) and d.startswith("KR")]
@@ -615,6 +625,22 @@ def main() -> None:
                         seen_funds_with_rows.add(fc)
                     if fc and not r.get("fund_code"):
                         restored_identity += 1
+
+    # ── 코드 없는 행 흡수
+    # 같은 표를 두 파서(텍스트/마크다운 쌍둥이)가 읽다가 한쪽만 코드 복원에
+    # 실패하면, 같은 (펀드, 보수율, 채널)의 코드 없는 행이 따로 남는다
+    # (실측: KR5144420091 '개인연금(C-' 절단 → NULL 행 + C-P1e 행 공존).
+    # 코드 있는 형제가 있으면 코드 없는 쪽을 지운다. 형제가 없는 코드 없는
+    # 행(기간 분할 행 등)은 그대로 둔다.
+    coded_keys = {(r["fund_code"], r["fee_total"], r["channel"])
+                  for r in rows_out if r["class_code"]}
+    n_absorbed = len(rows_out)
+    rows_out = [r for r in rows_out
+                if r["class_code"]
+                or (r["fund_code"], r["fee_total"], r["channel"]) not in coded_keys]
+    n_absorbed -= len(rows_out)
+    if n_absorbed:
+        print(f"코드 없는 중복 행 {n_absorbed}건을 코드 있는 형제 행으로 흡수")
 
     # ── 중복 제거
     # 같은 표가 "요약정보"와 본문에 두 번 인쇄된 문서가 있어 (fund_code, class_code)가
