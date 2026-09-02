@@ -996,8 +996,13 @@ class Retriever:
         # _make_title()은 첫 청크 앞머리를 긁는 방식이라 청킹이 바뀌면
         # 무너진다 — 제도 청크 교체 후 58개 문서 중 41개가 오염됐고
         # 12개는 '질문'이 됐다(실측 2026-08-31).
+        # 데이터의 doc_title에 같은 문구가 꼬리에 반복된 문서가 있다
+        # (실측 doc41: '…IRP 세액공제 안내 세액공제 안내' — 제목 추출 단계의
+        # 오염이 답변 근거 줄 48건에 그대로 인쇄됐다, 2026-09-02).
+        # 원본 청크는 안 고치므로(재임베딩 금지) 읽는 지점에서 꼬리 반복을 접는다.
         for m in self.meta:
             dt = (m.get("doc_title") or "").strip()
+            dt = re.sub(r"(\S.{2,}?)\s+\1$", r"\1", dt)
             doc = m.get("doc_id") or ""
             if dt and doc:
                 _DOC_TITLES[doc] = dt
