@@ -1403,15 +1403,6 @@ __CLASS_CODE_LIST__
   account_type: __ACCOUNT_TYPE_LIST__
       ※ 빈 문자열('')이 아니라 NULL입니다. account_type = '' 는 항상 0행입니다.
   channel: '오프라인'(203행), '온라인'(121행), '온라인슈퍼'(14행), NULL(25행)
-  channel별 실존 class_code — 채널 조건과 클래스 조건을 **함께** 걸 때는
-  반드시 아래 조합만 쓰십시오. 이 밖의 조합은 DB에 없어 항상 0행입니다.
-  괄호는 그 클래스의 계좌유형입니다. 질문이 채널과 계좌유형을 함께 말하면
-  (예: "온라인슈퍼 퇴직연금") 둘 다 만족하는 클래스를 고르고, 어느
-  클래스인지 확신이 없으면 class_code 조건을 걸지 말고 channel과
-  account_type으로만 거르십시오. 두 계좌유형을 **비교**하는 질문(예:
-  "개인연금과 퇴직연금 중 어느 쪽이 싼가")은 class_code 조건 없이
-  channel과 account_type IN ('연금저축','퇴직연금')으로 거르십시오:
-__CHANNEL_CLASS_MAP__
   fee_total 범위: 0.075 ~ 3.0
   fee_distribution, fee_peer_avg, fee_total_cost 에는 NULL이 많습니다.
   363행은 "펀드 × 클래스" 조합이고, 실제 펀드 종류는 73개입니다.
@@ -1878,52 +1869,9 @@ def _text2sql_prompt() -> str:
     acct_parts = [f"'{k}'({v}행)" for k, v in sorted(
         ((k, v) for k, v in at.items() if k), key=lambda kv: kv[0])]
     acct_parts.append(f"NULL({at.get(None, 0)}행 — 연금 전용이 아닌 일반 클래스)")
-    ccm = _channel_class_map()
-    ch_lines = [f"      {ch}: " + ", ".join(sorted(ccm.get(ch, [])))
-                for ch in ("온라인슈퍼", "온라인", "오프라인")]
     return (TEXT2SQL_PROMPT
             .replace("__CLASS_CODE_LIST__", "\n".join(lines))
-            .replace("__ACCOUNT_TYPE_LIST__", ", ".join(acct_parts))
-            .replace("__CHANNEL_CLASS_MAP__", "\n".join(ch_lines)))
-
-
-_CHANNEL_CLASS_CACHE = None
-
-
-def _channel_class_map():
-    """channel별 실존 class_code 집합을 캐시한다. _class_codes()와 같은 패턴.
-
-    실측 근거(2026-09-02 진단): 코드 75종 × 채널 3 = 225조합 중 실존은
-    73조합뿐 — 68%가 구조적으로 0행이다. 특히 온라인슈퍼는 6종(S계열)만
-    실존하는데, HCX가 목록 없이 클래스를 추측하면 'CP'+온라인슈퍼처럼
-    존재하지 않는 조합을 만들어 시작부터 0행이 됐다. 채널별 목록을
-    프롬프트에 주입해 추측 자체를 막는다(예방 계층 — 0행 완화로 클래스
-    조건을 떨어뜨리는 방식은 엉뚱한 클래스를 답하게 되므로 쓰지 않는다).
-    """
-    global _CHANNEL_CLASS_CACHE
-    if _CHANNEL_CLASS_CACHE is None:
-        import sqlite3
-        conn = sqlite3.connect(FUND_FEES_DB)
-        m = {}
-        # 코드에 계좌유형을 주석으로 단다("S-퇴직(퇴직연금)") — 채널과
-        # 계좌유형을 함께 말한 질문("온라인슈퍼 퇴직연금")에서 HCX가 어느
-        # 코드를 골라야 하는지 DB 데이터로 알려주기 위함이다. 주입 직후
-        # 실측에서 HCX가 실존 조합이긴 하나 계좌유형이 안 맞는 'S'(일반)를
-        # 골라 0.28%를 답했다(정답은 S-퇴직 0.25%).
-        # 주석은 그 (채널, 코드) 그룹의 전 행이 NULL 없이 같은 계좌유형일
-        # 때만 단다. MIN()으로 뽑으면 혼합 그룹에서 사전순 앞 값이 잡혀
-        # C-P2(퇴직연금)가 '연금저축'으로 잘못 표기된다(실측).
-        for ch, cc, n, n_at, nd, at in conn.execute(
-                "SELECT channel, class_code, COUNT(*), COUNT(account_type), "
-                "COUNT(DISTINCT account_type), MIN(account_type) FROM fund_fees "
-                "WHERE channel IS NOT NULL AND class_code IS NOT NULL "
-                "GROUP BY channel, class_code"):
-            if not any(t in cc for t in _SPLICE_TOKENS):
-                uniform = (n == n_at and nd == 1)
-                m.setdefault(ch, set()).add(f"{cc}({at})" if uniform else cc)
-        conn.close()
-        _CHANNEL_CLASS_CACHE = m
-    return _CHANNEL_CLASS_CACHE
+            .replace("__ACCOUNT_TYPE_LIST__", ", ".join(acct_parts)))
 
 
 _ACCOUNT_TYPES_CACHE = None
