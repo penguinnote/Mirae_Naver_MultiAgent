@@ -1,0 +1,142 @@
+{
+  "설명": "v1 평가셋 실패 이력 누적 파일. 회귀 판정 기준: 새 코드에서 실패했고 이 파일의 어떤 회차에도 실패 기록이 없는 문항이 나올 때만 중단한다. 모든 새 측정을 여기에 합집합으로 누적할 것.",
+  "갱신일": "2026-09-02",
+  "실패이력": {
+    "Q-005": [
+      "0901_channel",
+      "0901_deploy_local",
+      "0901_deploy_remote",
+      "0901_doc_ids_runA",
+      "0901_doc_ids_runB",
+      "0901_fund_fees",
+      "0902_acct_migrate",
+      "0902_acct_norm_run1",
+      "0902_acct_norm_run2",
+      "0902_acct_norm_run3",
+      "0902_prompt_classlist",
+      "0902_server_run1",
+      "0902_server_run2_cache",
+      "0902_server_run3"
+    ],
+    "Q-010": [
+      "0901_channel",
+      "0901_deploy_remote",
+      "0901_doc_ids_runA",
+      "0901_doc_ids_runB",
+      "0901_fund_fees",
+      "0902_acct_migrate",
+      "0902_acct_norm_run1",
+      "0902_acct_norm_run2",
+      "0902_acct_norm_run3",
+      "0902_prompt_classlist",
+      "0902_server_run1",
+      "0902_server_run2_cache",
+      "0902_server_run3"
+    ],
+    "Q-016": [
+      "0901_channel",
+      "0901_deploy_local",
+      "0901_doc_ids_runA"
+    ],
+    "Q-027": [
+      "0901_channel",
+      "0901_deploy_local",
+      "0901_deploy_remote",
+      "0901_doc_ids_runA",
+      "0901_doc_ids_runB",
+      "0901_fund_fees",
+      "0902_acct_migrate",
+      "0902_acct_norm_run1",
+      "0902_acct_norm_run2",
+      "0902_acct_norm_run3",
+      "0902_acct_type_fill",
+      "0902_prompt_classlist",
+      "0902_server_run1",
+      "0902_server_run2_cache",
+      "0902_server_run3"
+    ],
+    "Q-029": [
+      "0901_channel",
+      "0901_deploy_remote",
+      "0901_doc_ids_runB",
+      "0902_acct_type_fill",
+      "0902_server_run1",
+      "0902_server_run2_cache"
+    ],
+    "Q-030": [
+      "0901_channel",
+      "0901_deploy_local",
+      "0901_deploy_remote",
+      "0901_doc_ids_runB",
+      "0901_fund_fees",
+      "0902_acct_norm_run1",
+      "0902_acct_norm_run2",
+      "0902_acct_norm_run3",
+      "0902_acct_type_fill",
+      "0902_prompt_classlist",
+      "0902_server_run1",
+      "0902_server_run2_cache",
+      "0902_server_run3"
+    ],
+    "Q-031": [
+      "0901_channel",
+      "0901_deploy_local",
+      "0901_deploy_remote",
+      "0901_doc_ids_runA",
+      "0901_doc_ids_runB",
+      "0901_fund_fees",
+      "0902_acct_norm_run2",
+      "0902_acct_norm_run3",
+      "0902_acct_type_fill",
+      "0902_prompt_classlist",
+      "0902_server_run1",
+      "0902_server_run2_cache"
+    ],
+    "Q-032": [
+      "0901_channel",
+      "0901_deploy_local",
+      "0901_deploy_remote",
+      "0901_doc_ids_runA",
+      "0901_doc_ids_runB",
+      "0901_fund_fees",
+      "0902_acct_migrate",
+      "0902_acct_norm_run1",
+      "0902_acct_norm_run2",
+      "0902_acct_norm_run3",
+      "0902_acct_type_fill",
+      "0902_prompt_classlist",
+      "0902_server_run1",
+      "0902_server_run2_cache",
+      "0902_server_run3"
+    ],
+    "Q-033": [
+      "0902_acct_migrate"
+    ],
+    "Q-034": [
+      "0901_deploy_local",
+      "0901_doc_ids_runA",
+      "0901_doc_ids_runB",
+      "0901_fund_fees",
+      "0902_acct_migrate",
+      "0902_acct_norm_run1",
+      "0902_acct_norm_run2",
+      "0902_acct_norm_run3",
+      "0902_acct_type_fill",
+      "0902_prompt_classlist",
+      "0902_server_run1",
+      "0902_server_run2_cache",
+      "0902_server_run3"
+    ],
+    "Q-038": [
+      "0901_deploy_remote",
+      "0901_doc_ids_runA",
+      "0901_doc_ids_runB",
+      "0901_fund_fees",
+      "0902_acct_migrate",
+      "0902_acct_norm_run1",
+      "0902_prompt_classlist",
+      "0902_server_run1",
+      "0902_server_run2_cache"
+    ]
+  }
+}

@@ -1395,7 +1395,7 @@ __CLASS_CODE_LIST__
       ※ 표기가 펀드마다 흔들립니다('Ae' / 'A-e' / 'A-E'가 모두 존재).
         하이픈·대소문자는 조회할 때 자동으로 흡수되므로, 사용자가 말한
         표기를 그대로 쓰면 됩니다. 어느 쪽인지 고민하지 마십시오.
-  account_type: '연금저축'(48행), '퇴직연금'(53행), NULL(262행 — 연금 전용이 아닌 일반 클래스)
+  account_type: __ACCOUNT_TYPE_LIST__
       ※ 빈 문자열('')이 아니라 NULL입니다. account_type = '' 는 항상 0행입니다.
   channel: '오프라인'(203행), '온라인'(121행), '온라인슈퍼'(14행), NULL(25행)
   fee_total 범위: 0.075 ~ 3.0
@@ -1795,9 +1795,9 @@ def _fill_or_groups(sql: str, rows: list, state: dict) -> tuple:
 
         relaxed = _relax_fund_name(sub)
         if relaxed:
-            # 본경로와 같은 정규화를 태운다(계좌유형 이관·클래스 표기·판매경로)
+            # 본경로와 같은 정규화를 태운다(계좌유형 이관·동의어·클래스·판매경로)
             relaxed = _normalize_channel_sql(_normalize_class_sql(
-                _migrate_account_sql(relaxed)))
+                _normalize_account_sql(_migrate_account_sql(relaxed))))
             try:
                 got = _run_sql_rows(relaxed)
             except Exception:                            # noqa: BLE001
@@ -1860,7 +1860,31 @@ def _text2sql_prompt() -> str:
             cur = []
     if cur:
         lines.append("      " + ", ".join(cur))
-    return TEXT2SQL_PROMPT.replace("__CLASS_CODE_LIST__", "\n".join(lines))
+    at = _account_types()
+    acct_parts = [f"'{k}'({v}행)" for k, v in sorted(
+        ((k, v) for k, v in at.items() if k), key=lambda kv: kv[0])]
+    acct_parts.append(f"NULL({at.get(None, 0)}행 — 연금 전용이 아닌 일반 클래스)")
+    return (TEXT2SQL_PROMPT
+            .replace("__CLASS_CODE_LIST__", "\n".join(lines))
+            .replace("__ACCOUNT_TYPE_LIST__", ", ".join(acct_parts)))
+
+
+_ACCOUNT_TYPES_CACHE = None
+
+
+def _account_types():
+    """account_type의 DISTINCT 값과 행수를 캐시한다. _class_codes()와 같은
+    패턴 — 프롬프트 주입과 리터럴 정규화가 둘 다 이 실제 값만 쓴다.
+    (하드코딩 시절 값('연금저축' 48행 등)은 DB 재빌드 후 낡아 있었다.)
+    """
+    global _ACCOUNT_TYPES_CACHE
+    if _ACCOUNT_TYPES_CACHE is None:
+        import sqlite3
+        conn = sqlite3.connect(FUND_FEES_DB)
+        _ACCOUNT_TYPES_CACHE = dict(conn.execute(
+            "SELECT account_type, COUNT(*) FROM fund_fees GROUP BY account_type"))
+        conn.close()
+    return _ACCOUNT_TYPES_CACHE
 
 
 def _class_codes():
@@ -2137,6 +2161,18 @@ def _migrate_account_sql(sql: str) -> str:
     return _ACCT_EQ_RE.sub(_eq, out)
 
 
+def _drop_account_cond(sql: str) -> str:
+    """account_type 등호·IN 조건을 항진식(1=1)으로 바꿔 조건을 떨어뜨린다.
+
+    0행 완화 전용이다. 동의어 정규화(_normalize_account_sql)로도 못 알아본
+    표현이 남아 0행이면, 잘못 좁히느니 조건을 버리고 넓게 잡는다(route()의
+    원칙 그대로). IS NULL / IS NOT NULL은 프롬프트가 안내하는 정상 필터라
+    건드리지 않는다.
+    """
+    out = _ACCT_TYPE_EQ_RE.sub("1=1", sql)
+    return _ACCT_TYPE_IN_RE.sub("1=1", out)
+
+
 def _normalize_class_sql(sql: str) -> str:
     """class_code 비교를 표기 흔들림에 강하게 바꾼다.
 
@@ -2166,6 +2202,60 @@ def _normalize_class_sql(sql: str) -> str:
     out = _CLASS_IN_RE.sub(_in, sql)
     out = _CLASS_EQ_RE.sub(_eq, out)
     return out
+
+
+# ── account_type 리터럴 정규화 ─────────────────────────────────────────
+#
+# 실측 근거(2026-09-02, 코드 없는 KB 질의 "개인연금과 퇴직연금 중 어느 쪽이
+# 싸가요"): HCX가 `account_type = '개인연금'`을 만들었는데 DB의 account_type은
+# '연금저축'/'퇴직연금'/NULL 셋뿐이라 0행이 됐다. _channel_cond가
+# '온라인직접판매'를 실제 값으로 바꾸는 것과 같은 문제·같은 해법이다.
+# 동의어 집합으로 처리하되, 치환 대상은 반드시 _account_types()가 DB에서
+# 읽어온 실제 값으로 한정한다 — DB에 없는 값으로 바꾸면 0행이긴 마찬가지다.
+_ACCOUNT_SYNONYMS = {
+    "연금저축": ("연금저축", "개인연금", "개인", "연금저축펀드", "연금저축계좌",
+               "세제적격"),
+    "퇴직연금": ("퇴직연금", "퇴직", "DC", "IRP", "확정기여", "퇴직연금계좌",
+               "DC형", "IRP계좌"),
+}
+_ACCT_TYPE_EQ_RE = re.compile(r"account_type\s*=\s*'([^']*)'", re.I)
+_ACCT_TYPE_IN_RE = re.compile(r"account_type\s+IN\s*\(([^)]*)\)", re.I)
+
+
+def _account_cond_value(literal: str) -> str | None:
+    """리터럴 하나를 DB 실제 account_type 값으로 해석한다. 못 하면 None."""
+    norm = re.sub(r"[\s\-]", "", literal).upper()
+    for target, syns in _ACCOUNT_SYNONYMS.items():
+        if target not in _account_types():
+            continue                       # DB에 실제로 있는 값일 때만 치환
+        if norm in {re.sub(r"[\s\-]", "", x).upper() for x in syns}:
+            return target
+    return None
+
+
+def _normalize_account_sql(sql: str) -> str:
+    """account_type 비교의 동의어 리터럴을 DB 실제 값으로 바꾼다."""
+    def _eq(m):
+        v = _account_cond_value(m.group(1))
+        return f"account_type = '{v}'" if v else m.group(0)
+
+    def _in(m):
+        lits = re.findall(r"'([^']*)'", m.group(1))
+        if not lits:
+            return m.group(0)
+        vals, changed = [], False
+        for x in lits:
+            v = _account_cond_value(x)
+            changed = changed or (v is not None and v != x)
+            v = v or x                     # 못 알아본 값은 그대로 둔다
+            if v not in vals:
+                vals.append(v)
+        if not changed:
+            return m.group(0)
+        return "account_type IN (" + ", ".join(f"'{v}'" for v in vals) + ")"
+
+    out = _ACCT_TYPE_IN_RE.sub(_in, sql)
+    return _ACCT_TYPE_EQ_RE.sub(_eq, out)
 
 
 _CHANNEL_EQ_RE = re.compile(r"channel\s*=\s*'([^']*)'", re.I)
@@ -2287,6 +2377,12 @@ def fee_sql(state: dict) -> dict:
                 state["trace"].append(
                     "fee_sql: 계좌유형 리터럴을 account_type 조건으로 이관")
                 sql = acct
+            # account_type 리터럴의 동의어('개인연금' 등)도 DB 실제 값으로 맞춘다
+            an = _normalize_account_sql(sql)
+            if an != sql:
+                state["trace"].append(
+                    "fee_sql: account_type 값을 DB 실제 값으로 정규화")
+                sql = an
             # 클래스 코드 표기 흔들림은 항상 흡수한다 (위 설명 참조)
             norm = _normalize_class_sql(sql)
             if norm != sql:
@@ -2337,7 +2433,7 @@ def fee_sql(state: dict) -> dict:
                     # 실측(killing camp H-08): channel='온라인'을 그대로 두면
                     # '온라인슈퍼'인 S-P2(0.15%)를 놓치고 Ae(0.195%)만 잡는다.
                     relaxed = _normalize_channel_sql(_normalize_class_sql(
-                        _migrate_account_sql(relaxed)))
+                        _normalize_account_sql(_migrate_account_sql(relaxed))))
                     try:
                         conn = sqlite3.connect(FUND_FEES_DB)
                         conn.row_factory = sqlite3.Row
@@ -2353,6 +2449,25 @@ def fee_sql(state: dict) -> dict:
                     except Exception as e:                   # noqa: BLE001
                         state["trace"].append(
                             f"fee_sql: 완화 재조회 실패 ({type(e).__name__})")
+
+            # 그래도 0행이고 account_type 조건이 남아 있으면 그 조건만
+            # 떨어뜨리고 한 번 더. 동의어 정규화로도 못 알아본 표현이면
+            # (실측: account_type='개인연금' 시절의 0행) 조건이 틀렸을 공산이
+            # 크다 — 잘못 좁히면 정답을 아예 못 보고, 안 좁히면 순위만 밀린다.
+            if not rows:
+                base = relaxed if (locals().get("relaxed")) else sql
+                dropped = _drop_account_cond(base)
+                if dropped != base:
+                    try:
+                        rows2 = _run_sql_rows(_validate_sql(dropped))
+                    except Exception:                        # noqa: BLE001
+                        rows2 = []
+                    state["trace"].append(
+                        f"fee_sql: 0행 → account_type 조건을 떨어뜨리고 재조회 "
+                        f"({len(rows2)}행)\n  {dropped}")
+                    if rows2:
+                        rows = rows2
+                        sql = dropped
 
             # 위 완화로도 못 건졌고, 애초에 SQL에 fund_name 조건 자체가
             # 없었다면 — text2sql이 질문 속 펀드 비교를 통째로 놓친
