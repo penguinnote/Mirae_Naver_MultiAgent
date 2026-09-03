@@ -446,7 +446,23 @@ def _needs_sql(question: str) -> bool:
     # 훨씬 자연스러운 표현이고, 그것만으로도 DB에서 행을 특정할 수 있다.
     has_class_attr = any(a in low for a in SQL_CLASS_ATTR)
 
-    return has_compare or has_sort or has_agg or has_class or has_class_attr
+    # 펀드**코드**를 직접 적은 단일 사실 질문도 켠다.
+    #
+    # 실측 근거(D2-11, 2026-09-03): "KB스타 중기 국공채(KR5127420034)의
+    # 총보수는 몇 %인가요?"에서 비교·정렬·클래스 신호가 하나도 없어 SQL이
+    # 안 켜졌고, 검색 텍스트의 수치가 DB와 대조되지 않은 채 답이 나갔다.
+    # 이 펀드는 fund_fees에 15행(0.18~0.523%) 있다.
+    #
+    # 게이트를 **코드 표기로만** 좁힌 이유: 펀드'명'까지 넣으면 H3-16
+    # ("우리나라초단기채권…, 중도에 환매하면 환매수수료가 붙나요?")이
+    # 함께 켜지는데, 환매수수료는 fund_fees에 없는 정보라 SQL이 답을
+    # 흐릴 수 있다. 그 문항은 현재 4회 측정 전부 정답이므로 건드리지
+    # 않는다. 코드 표기(KR…)는 90문항 오프라인 스캔에서 새로 켜지는
+    # 문항이 0개로, 기존 동작을 바꾸지 않는다.
+    has_fund_code = bool(FUND_CODE_RE.search(question))
+
+    return (has_compare or has_sort or has_agg or has_class
+            or has_class_attr or has_fund_code)
 
 
 # ── 계산 라우팅 신호 ─────────────────────────────────────────────────
@@ -2178,6 +2194,56 @@ def _drop_account_cond(sql: str) -> str:
     return _ACCT_TYPE_IN_RE.sub("1=1", out)
 
 
+# ── 클래스 미지정 총보수 질문: 경로·계좌 열을 살려 범위로 답하게 한다 ──
+#
+# 실측 근거(D2-11, 2026-09-03): "KB스타 중기 국공채(KR5127420034)의 총보수는
+# 몇 %인가요?"에서 HCX가 규칙 3·4를 따라
+#   SELECT fee_total … ORDER BY fee_total ASC LIMIT 1
+# 을 만들었다. 15행 중 최저 1행(C-W 0.18%)만 돌아왔고, C-W는 랩·금전신탁
+# 전용이라 일반 가입자에게 대표값으로 나가면 오해를 준다.
+#
+# 사용자가 알아야 할 것은 순위가 아니라 "내 가입 경로가 어디냐"다. 질문에
+# 클래스 신호가 없을 때는 channel·account_type을 함께 뽑아 경로별로 묶을 수
+# 있게 하고 LIMIT을 푼다. 프롬프트는 건드리지 않는다 — 생성된 SQL만 고친다.
+_SUPERLATIVE_RE = re.compile(
+    r"가장\s*(?:싼|낮|비싼|높|저렴)|제일\s*(?:싼|낮|비싼|높|저렴)"
+    r"|최저|최고|최소|최대|저렴한\s*순|비싼\s*순|순위|정렬")
+_SELECT_HEAD_RE = re.compile(r"^\s*SELECT\s+(.*?)\s+FROM\s", re.I | re.S)
+_FEE_COLS = ("fund_name", "class_code", "account_type", "channel", "fee_total", "page")
+
+
+def _expand_fee_select(sql: str, question: str) -> str:
+    """클래스 조건이 없는 보수 조회면 SELECT를 경로·계좌까지 넓히고 LIMIT을 푼다."""
+    # 질문에 클래스 신호가 있으면 사용자가 특정 클래스를 물은 것이므로 손대지 않는다
+    if "클래스" in question or _CLASS_CODE_RE.search(question):
+        return sql
+    # 최상급·정렬을 **명시적으로 요구한** 질문도 손대지 않는다. 그때는 단일
+    # 최저/최고값이 정답이고, 경로별로 펼치면 질문에 답하지 않은 것이 된다
+    # (Q-014 "총보수가 가장 싼 게 뭔가요?"). 클래스 조건이나 account_type
+    # 조건이 붙어 우연히 막히는 경우가 있지만 그 우연에 기대지 않는다.
+    if _SUPERLATIVE_RE.search(question):
+        return sql
+    # SQL이 이미 클래스를 좁히고 있으면 그 의도를 존중한다
+    if _CLASS_EQ_RE.search(sql) or _CLASS_IN_RE.search(sql) or _ACCT_TYPE_EQ_RE.search(sql):
+        return sql
+    m = _SELECT_HEAD_RE.search(sql)
+    if not m or "fee_total" not in m.group(1).lower():
+        return sql
+    cols = m.group(1)
+    if all(c in cols.lower() for c in ("class_code", "channel")):
+        return sql                       # 이미 넓다
+    out = ("SELECT DISTINCT " + ", ".join(_FEE_COLS)
+           + sql[m.end(1):])
+    # 최저 1행만 보는 LIMIT을 푼다 — 경로별로 나열하려면 전 행이 필요하다.
+    # 정렬도 보수 순(순위)이 아니라 경로·계좌 순으로 바꾼다. 프롬프트에
+    # 들어가는 표가 그 순서여야 답변이 경로별로 묶인다.
+    parts = _split_where_suffix(out)
+    if parts:
+        pre, where, suf = parts
+        out = (f"{pre}{where} ORDER BY channel, account_type, fee_total").strip()
+    return out
+
+
 def _normalize_class_sql(sql: str) -> str:
     """class_code 비교를 표기 흔들림에 강하게 바꾼다.
 
@@ -2382,6 +2448,12 @@ def fee_sql(state: dict) -> dict:
                 state["trace"].append(
                     "fee_sql: 계좌유형 리터럴을 account_type 조건으로 이관")
                 sql = acct
+            # 클래스 신호가 없는 보수 질문이면 경로·계좌 열을 살린다
+            ex = _expand_fee_select(sql, q)
+            if ex != sql:
+                state["trace"].append(
+                    "fee_sql: 클래스 미지정 → 경로·계좌 열을 포함해 전체 조회")
+                sql = ex
             # account_type 리터럴의 동의어('개인연금' 등)도 DB 실제 값으로 맞춘다
             an = _normalize_account_sql(sql)
             if an != sql:
