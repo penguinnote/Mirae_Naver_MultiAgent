@@ -798,6 +798,13 @@ def N(s: str) -> str:
 # 그런데 상담을 받는 사람에게 'doc46'은 아무 의미가 없다. 그래서 문서의
 # 첫 쪽 앞머리에서 **사람이 읽을 수 있는 제목**을 뽑아 그걸 표시한다.
 # 58개 중 50개가 이 규칙으로 깔끔하게 나오고, 나머지는 아래 표로 채운다.
+# 손상 표 청크 → 같은 페이지 정상 table 청크 매핑(데이터 파일, 없으면 기능 꺼짐)
+try:
+    _DAMAGED_MAP = json.loads(
+        (_DATA_DIR / "damaged_table_map.json").read_text(encoding="utf-8"))
+except Exception:                                            # noqa: BLE001
+    _DAMAGED_MAP = {}
+
 _CID_PAGE_RE = re.compile(r"_p(\d+)_(\d+)$")
 _TITLE_STOP = re.compile(r"[■●▶]|\d{4}\.\s?\d{1,2}\.\s?\d{1,2}|\s\d+\.\s*|\s가\.\s|제\s?\d+\s?부|\?|:")
 _TITLE_ENDER = re.compile(
@@ -1110,6 +1117,36 @@ class Retriever:
                 + ", ".join(c for c, _ in extra))
         return list(hits) + extra
 
+    # ── 손상 표 청크를 같은 페이지의 정상 table 버전으로 갈아끼운다 ──
+    #
+    # 실측 근거(2026-09-03): 투자설명서 수수료 표 청크 797개 중 300개(38%)가
+    # PDF 추출 단계에서 행·열 대응이 파괴됐다. 헤더가 여러 줄로 흩어지고
+    # 클래스 라벨이 숫자 줄과 분리돼, 사람이 읽어도 어느 값이 어느 열인지
+    # 알 수 없다. 실제 오독 2건을 확인했다 — A클래스 선취수수료(0.30%이내)를
+    # C클래스 총보수로, 기간별 총비용(1년/2년…)을 총보수로 답했다.
+    #
+    # 손상의 97%가 content_type=text 경로이고, 같은 페이지에 정상 table
+    # 버전이 이미 코퍼스에 있는 경우가 295/300(98%)이다. 재추출·재임베딩
+    # 없이 읽는 지점에서 갈아끼우면 된다. 매핑이 없는 5개는 그대로 둔다.
+    def _swap_damaged(self, picked: list, state: dict) -> list:
+        if not _DAMAGED_MAP:
+            return picked
+        out, swapped = [], []
+        seen = {c for c, _ in picked}
+        for cid, src in picked:
+            new = _DAMAGED_MAP.get(cid)
+            if new and new in self.text_of and new not in seen:
+                seen.add(new)
+                swapped.append(f"{cid}→{new}")
+                out.append((new, src))
+            else:
+                out.append((cid, src))
+        if swapped:
+            state["trace"].append(
+                "retrieve: 행·열이 깨진 표 청크를 정상 표 버전으로 교체 → "
+                + ", ".join(swapped))
+        return out
+
     def _detect_compare_funds(self, question: str):
         """질문에 같은 계열(뿌리)의 펀드가 2개 이상 언급됐는지 찾는다.
 
@@ -1343,6 +1380,7 @@ class Retriever:
             return self(state)   # doc_type·fund가 None이 되므로 재귀는 1회로 끝난다
 
         picked = self._add_short_neighbors(fused[:TOP_K], state)
+        picked = self._swap_damaged(picked, state)
 
         ev = []
         for cid, src in picked:
