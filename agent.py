@@ -89,7 +89,7 @@ CHAT_URL_DEFAULT = "https://clovastudio.stream.ntruss.com/v3/chat-completions/HC
 #
 # 컨텍스트 여유는 충분하다 — 실측 평균 4,194자로 MAX_CONTEXT_CHARS(9,000)의
 # 절반이고 상한에 걸린 문항이 0개였다. k=8이면 평균 6,700자로 여전히 여유가 있다.
-TOP_K = 8
+TOP_K = 12
 EVIDENCE_CHARS = 1500  # 청크 하나당 프롬프트에 넣을 최대 길이
 DEADLINE = 240       # 주최측 타임아웃 300초 중 60초를 안전 마진으로 남긴다
 
