@@ -2,12 +2,21 @@
   "설명": "v1 평가셋 실패 이력 누적 파일. 회귀 판정 기준: 새 코드에서 실패했고 이 파일의 어떤 회차에도 실패 기록이 없는 문항이 나올 때만 중단한다. 모든 새 측정을 여기에 합집합으로 누적할 것. 08-18 전 라운드(base·run1·round2~6)와 09-01 이후 전 측정을 소급 반영함.",
   "갱신일": "2026-09-02",
   "실패이력": {
+    "EXT-10": [
+      "0903_srv_ext30"
+    ],
+    "EXT-14": [
+      "0903_srv_ext30"
+    ],
     "H3-02": [
-      "0903_hold_final"
+      "0903_hold_final",
+      "0903_swap_holdC"
     ],
     "H3-04": [
       "0903_d211_holdA",
       "0903_d211_holdB",
+      "0903_fl_holdA",
+      "0903_fl_holdB",
       "0903_hold_cfA",
       "0903_hold_cfB",
       "0903_hold_cfC",
@@ -20,6 +29,8 @@
       "0903_k12_holdD",
       "0903_label_holdA",
       "0903_label_holdB",
+      "0903_swap_holdC",
+      "0903_swap_holdD",
       "0903_taxbr_holdA",
       "0903_taxbr_holdB",
       "0903_taxbr_holdC",
@@ -32,6 +43,8 @@
     "H3-12": [
       "0903_d211_holdA",
       "0903_d211_holdB",
+      "0903_fl_holdA",
+      "0903_fl_holdB",
       "0903_hold_cfA",
       "0903_hold_cfB",
       "0903_hold_cfC",
@@ -44,6 +57,8 @@
       "0903_k12_holdD",
       "0903_label_holdA",
       "0903_label_holdB",
+      "0903_swap_holdC",
+      "0903_swap_holdD",
       "0903_taxbr_holdA",
       "0903_taxbr_holdB",
       "0903_taxbr_holdC",
@@ -57,6 +72,7 @@
     "H3-14": [
       "0903_d211_holdA",
       "0903_d211_holdB",
+      "0903_fl_holdA",
       "0903_hold_cfA",
       "0903_hold_cfB",
       "0903_hold_cfC",
@@ -67,6 +83,8 @@
       "0903_k12_holdD",
       "0903_label_holdA",
       "0903_label_holdB",
+      "0903_swap_holdC",
+      "0903_swap_holdD",
       "0903_taxbr_holdA",
       "0903_taxbr_holdB",
       "0903_taxbr_holdC",
@@ -80,6 +98,8 @@
     "H3-17": [
       "0903_d211_holdA",
       "0903_d211_holdB",
+      "0903_fl_holdA",
+      "0903_fl_holdB",
       "0903_hold_cfA",
       "0903_hold_cfB",
       "0903_hold_cfC",
@@ -92,6 +112,8 @@
       "0903_k12_holdD",
       "0903_label_holdA",
       "0903_label_holdB",
+      "0903_swap_holdC",
+      "0903_swap_holdD",
       "0903_taxbr_holdA",
       "0903_taxbr_holdB",
       "0903_taxbr_holdC",
@@ -116,6 +138,8 @@
     "H3-20": [
       "0903_d211_holdA",
       "0903_d211_holdB",
+      "0903_fl_holdA",
+      "0903_fl_holdB",
       "0903_hold_cfA",
       "0903_hold_cfB",
       "0903_hold_cfC",
@@ -128,6 +152,8 @@
       "0903_k12_holdD",
       "0903_label_holdA",
       "0903_label_holdB",
+      "0903_swap_holdC",
+      "0903_swap_holdD",
       "0903_taxbr_holdA",
       "0903_taxbr_holdB",
       "0903_taxbr_holdC",
@@ -136,12 +162,16 @@
     ],
     "H3-21": [
       "0903_d211_holdB",
+      "0903_fl_holdB",
       "0903_hold_final",
       "0903_k12_holdB",
       "0903_k12_holdC",
-      "0903_k12_holdD"
+      "0903_k12_holdD",
+      "0903_swap_holdC",
+      "0903_swap_holdD"
     ],
     "H3-22": [
+      "0903_fl_holdA",
       "0903_hold_cfB",
       "0903_hold_cfC",
       "0903_hold_final",
@@ -158,6 +188,8 @@
     "H3-23": [
       "0903_d211_holdA",
       "0903_d211_holdB",
+      "0903_fl_holdA",
+      "0903_fl_holdB",
       "0903_hold_cfA",
       "0903_hold_cfB",
       "0903_hold_cfC",
@@ -170,6 +202,8 @@
       "0903_k12_holdD",
       "0903_label_holdA",
       "0903_label_holdB",
+      "0903_swap_holdC",
+      "0903_swap_holdD",
       "0903_taxbr_holdA",
       "0903_taxbr_holdB",
       "0903_taxbr_holdC",
@@ -179,6 +213,8 @@
     "H3-24": [
       "0903_d211_holdA",
       "0903_d211_holdB",
+      "0903_fl_holdA",
+      "0903_fl_holdB",
       "0903_hold_cfA",
       "0903_hold_cfB",
       "0903_hold_cfC",
@@ -191,6 +227,8 @@
       "0903_k12_holdD",
       "0903_label_holdA",
       "0903_label_holdB",
+      "0903_swap_holdC",
+      "0903_swap_holdD",
       "0903_taxbr_holdA",
       "0903_taxbr_holdB",
       "0903_taxbr_holdC",
@@ -386,6 +424,7 @@
       "0902_server_run2_cache",
       "0902_title_dedup",
       "0903_d211_v1A",
+      "0903_fl_v1B",
       "0903_isa_v1A",
       "0903_isa_v1B",
       "0903_k12_v1A",
@@ -429,6 +468,8 @@
       "0902_title_dedup",
       "0903_d211_v1A",
       "0903_d211_v1B",
+      "0903_fl_v1A",
+      "0903_fl_v1B",
       "0903_isa_v1A",
       "0903_isa_v1B",
       "0903_k12_v1A",
@@ -482,6 +523,8 @@
       "0902_title_dedup",
       "0903_d211_v1A",
       "0903_d211_v1B",
+      "0903_fl_v1A",
+      "0903_fl_v1B",
       "0903_isa_v1A",
       "0903_isa_v1B",
       "0903_k12_v1A",
@@ -521,12 +564,16 @@
     "Q-039": [
       "0818_run1"
     ],
+    "V-02": [
+      "0903_srv_v2"
+    ],
     "V-03": [
       "0818_round2"
     ],
     "V-04": [
       "0818_base",
-      "0818_round2"
+      "0818_round2",
+      "0903_srv_v2"
     ],
     "V-14": [
       "0818_base",
@@ -535,6 +582,66 @@
     "V-17": [
       "0818_base",
       "0818_round2"
+    ],
+    "V4S-H05": [
+      "0903_srv_v4stress"
+    ],
+    "V4S-H06": [
+      "0903_srv_v4stress"
+    ],
+    "V4S-H08": [
+      "0903_srv_v4stress"
+    ],
+    "V4S-H10": [
+      "0903_srv_v4stress"
+    ],
+    "V4S-I11": [
+      "0903_srv_v4stress"
+    ],
+    "V4S-P02": [
+      "0903_srv_v4stress"
+    ],
+    "V4S-P07": [
+      "0903_srv_v4stress"
+    ],
+    "V5G-H02": [
+      "0903_srv_v5"
+    ],
+    "V5G-H03": [
+      "0903_srv_v5"
+    ],
+    "V5G-H06": [
+      "0903_srv_v5"
+    ],
+    "V5G-H07": [
+      "0903_srv_v5"
+    ],
+    "V5G-H08": [
+      "0903_srv_v5"
+    ],
+    "V5G-H11": [
+      "0903_srv_v5"
+    ],
+    "V5G-H12": [
+      "0903_srv_v5"
+    ],
+    "V5G-I04": [
+      "0903_srv_v5"
+    ],
+    "V5G-I06": [
+      "0903_srv_v5"
+    ],
+    "V5G-I07": [
+      "0903_srv_v5"
+    ],
+    "V5G-I08": [
+      "0903_srv_v5"
+    ],
+    "V5G-P05": [
+      "0903_srv_v5"
+    ],
+    "V5G-P11": [
+      "0903_srv_v5"
     ]
   },
   "회차기록": {
@@ -573,6 +680,16 @@
     "0903_d211_holdA": "종합 83.8 (A77.4/B91.5/C80.8/E98.3)",
     "0903_d211_holdB": "종합 82.6 (A74.9/B91.5/C80.8/E98.3)",
     "0903_d211_v1A": "92.5/97.5",
-    "0903_d211_v1B": "95.0/97.5"
+    "0903_d211_v1B": "95.0/97.5",
+    "0903_fl_holdA": "종합 84.3 (A77.8/B91.5/C80.8/E100)",
+    "0903_fl_holdB": "종합 84.7 (A79.0/B91.5/C80.8/E98.4)",
+    "0903_fl_v1A": "95.0/97.5",
+    "0903_fl_v1B": "92.5/97.5",
+    "0903_swap_holdC": "종합 80.5",
+    "0903_swap_holdD": "종합 81.9",
+    "0903_srv_v2": "90.9/100.0",
+    "0903_srv_ext30": "93.3/86.7",
+    "0903_srv_v4stress": "80.6/83.3",
+    "0903_srv_v5": "63.9/58.3 (정답지 열 오독 다수 — 지표 제외)"
   }
 }

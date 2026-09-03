@@ -2707,6 +2707,25 @@ def format_sql_results(state: dict) -> str:
     skip = {"chunk_id", "source_path"}
     show = [c for c in cols if c not in skip]
 
+    # 값이 하나도 없는 열은 통째로 뺀다.
+    #
+    # 실측 근거(V5G-H12, 2026-09-03): 미래에셋장기성장포커스의
+    # front_load_text가 라벨 줄나눔 때문에 파싱되지 않아 빈 값인데,
+    # "선취판매수수료 | (빈칸)"이 프롬프트에 들어가자 모델이 이를
+    # **"선취판매수수료: 없음"으로 단정**했다. 원문에는 "납입금액의 1% 이내"가
+    # 명확히 있으므로 사실과 반대되는 답이다. 빈 값에는 정보가 없으니
+    # 열을 빼도 손실이 0이고, 없는 것을 있다고 말하지 않게 된다.
+    #
+    # ⚠ 0과 0.0은 빈 값이 아니다 — 수수료가 실제로 0%인 클래스가 있다.
+    # None / 빈 문자열 / 공백만 있는 문자열만 비어 있는 것으로 본다.
+    def _blank(v):
+        return v is None or (isinstance(v, str) and not v.strip())
+
+    shown_rows = rows[:min(len(rows), 30)]
+    show = [c for c in show if not all(_blank(r.get(c)) for r in shown_rows)]
+    if not show:
+        show = [c for c in cols if c not in skip]      # 전부 비면 원래대로
+
     lines.append(" | ".join(show))
     lines.append(" | ".join("---" for _ in show))
 
