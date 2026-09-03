@@ -2552,6 +2552,9 @@ def fee_sql(state: dict) -> dict:
 
 # 한글 사이('개 인연금')와 구분자 뒤('- 오프라인') 양쪽을 다 잡는다.
 _LABEL_SPACE_RE = re.compile(r"(?<=[가-힣\-])\s+(?=[가-힣])")
+# 라벨에 끼어든 삽입어(판매수수료 칸 값·그룹 제목). build_fund_fees의
+# _SPLICE_TOKENS와 같은 집합이다.
+_LABEL_SPLICE_RE = re.compile(r"없음|투자비용")
 
 
 def _clean_label(v: str) -> str:
@@ -2561,8 +2564,16 @@ def _clean_label(v: str) -> str:
     ('개 인연금', '퇴 직연금', '오 프라인'). 이걸 그대로 프롬프트에 넣으면
     LLM이 답변에도 그 띄어쓰기를 옮겨 적어서, 채점의 '개인연금' 문자열
     매칭이 빗나간다. DB는 건드리지 않고 표시할 때만 정리한다.
+
+    같은 줄나눔 때문에 판매수수료 칸의 '없음'과 그룹 제목 '투자비용'이
+    라벨 한가운데로 끼어드는 행이 135건 있다. 공백만 지우면 오히려
+    앞뒤에 달라붙어 '오프라인-없음개인연금(C-P)'처럼 답변에 그대로
+    인쇄된다(실측 Q-013, 2026-09-03). 라벨 의미와 무관한 삽입어라
+    공백 제거 **전에** 걷어낸다 — 전수 대조에서 69종 중 65종이 정상화되고
+    클래스 코드가 소실되는 행은 0종이다(나머지 4종은 이 제거와 무관하게
+    원문 단계에서 이미 깨진 라벨).
     """
-    return _LABEL_SPACE_RE.sub("", v)
+    return _LABEL_SPACE_RE.sub("", _LABEL_SPLICE_RE.sub("", v))
 
 
 def format_sql_results(state: dict) -> str:
