@@ -11,7 +11,8 @@
       "0903_hold_cfC",
       "0903_hold_final",
       "0903_taxbr_holdA",
-      "0903_taxbr_holdB"
+      "0903_taxbr_holdB",
+      "0903_taxbr_holdC"
     ],
     "H3-06": [
       "0903_hold_final"
@@ -22,7 +23,8 @@
       "0903_hold_cfC",
       "0903_hold_final",
       "0903_taxbr_holdA",
-      "0903_taxbr_holdB"
+      "0903_taxbr_holdB",
+      "0903_taxbr_holdC"
     ],
     "H3-13": [
       "0903_hold_final"
@@ -33,7 +35,8 @@
       "0903_hold_cfC",
       "0903_hold_final",
       "0903_taxbr_holdA",
-      "0903_taxbr_holdB"
+      "0903_taxbr_holdB",
+      "0903_taxbr_holdC"
     ],
     "H3-16": [
       "0903_hold_cfB",
@@ -45,7 +48,8 @@
       "0903_hold_cfC",
       "0903_hold_final",
       "0903_taxbr_holdA",
-      "0903_taxbr_holdB"
+      "0903_taxbr_holdB",
+      "0903_taxbr_holdC"
     ],
     "H3-19": [
       "0903_hold_cfA",
@@ -53,7 +57,8 @@
       "0903_hold_cfC",
       "0903_hold_final",
       "0903_taxbr_holdA",
-      "0903_taxbr_holdB"
+      "0903_taxbr_holdB",
+      "0903_taxbr_holdC"
     ],
     "H3-20": [
       "0903_hold_cfA",
@@ -61,7 +66,8 @@
       "0903_hold_cfC",
       "0903_hold_final",
       "0903_taxbr_holdA",
-      "0903_taxbr_holdB"
+      "0903_taxbr_holdB",
+      "0903_taxbr_holdC"
     ],
     "H3-21": [
       "0903_hold_final"
@@ -70,7 +76,8 @@
       "0903_hold_cfB",
       "0903_hold_cfC",
       "0903_hold_final",
-      "0903_taxbr_holdA"
+      "0903_taxbr_holdA",
+      "0903_taxbr_holdC"
     ],
     "H3-23": [
       "0903_hold_cfA",
@@ -78,7 +85,8 @@
       "0903_hold_cfC",
       "0903_hold_final",
       "0903_taxbr_holdA",
-      "0903_taxbr_holdB"
+      "0903_taxbr_holdB",
+      "0903_taxbr_holdC"
     ],
     "H3-24": [
       "0903_hold_cfA",
@@ -86,7 +94,8 @@
       "0903_hold_cfC",
       "0903_hold_final",
       "0903_taxbr_holdA",
-      "0903_taxbr_holdB"
+      "0903_taxbr_holdB",
+      "0903_taxbr_holdC"
     ],
     "Q-005": [
       "0901_channel",
@@ -379,6 +388,7 @@
     "0903_taxbr_holdA": "종합 81.2 (A74.1)",
     "0903_taxbr_holdB": "종합 81.5 (A75.3/B86.2/C79.2/E98.3)",
     "0903_taxbr_v1A": "82.5/95.0",
-    "0903_taxbr_v1B": "80.0/95.0"
+    "0903_taxbr_v1B": "80.0/95.0",
+    "0903_taxbr_holdC": "종합 80.4 (A74.1/B86.2/C74.2/E100)"
   }
 }
