@@ -1666,6 +1666,37 @@ def _relax_fund_name(sql: str) -> str | None:
     return out if changed else None
 
 
+# 리터럴 쪽 LIKE 패턴. 컬럼이 REPLACE(fund_name,' ','') 형태든 맨 fund_name이든 잡는다.
+_FUND_ANY_LIKE_RE = re.compile(
+    r"((?:REPLACE\(fund_name,' ',''\)|fund_name)\s+LIKE\s*)'([^']*)'", re.I)
+
+
+def _strip_fund_literals(sql: str) -> str | None:
+    """LIKE 리터럴에서 자산군 태그·법적 명칭·공백을 뗀다. 바꿀 게 없으면 None.
+
+    실측 근거(EQ3-O5, 2026-09-04): 질문이 "스팍스한국엄선투자[주식]"이라
+    HCX가 LIKE '%스팍스한국엄선투자[주식]%'를 만들었는데 정식 명칭은
+    '스팍스한국엄선투자증권자투자신탁[주식] [AY119]'라 '[주식]' 앞에
+    '증권자투자신탁'이 끼어 구조적으로 매치될 수 없었다. 위 _relax_fund_name은
+    컬럼 표현식만 바꾸고 리터럴은 그대로 두므로 이 경우를 못 고친다.
+    제거 집합은 _known_fund_shorthands가 쓰는 _SHORTHAND_STRIP_RE 그대로다.
+    떼고 남은 글자가 2자 미만이면 사실상 전체 매치가 되므로 손대지 않는다.
+    """
+    changed = False
+
+    def _sub(m):
+        nonlocal changed
+        lit = m.group(2)
+        core = _SHORTHAND_STRIP_RE.sub("", lit)
+        if core == lit or len(core.replace("%", "")) < 2:
+            return m.group(0)
+        changed = True
+        return f"{m.group(1)}'{core}'"
+
+    out = _FUND_ANY_LIKE_RE.sub(_sub, sql)
+    return out if changed else None
+
+
 # ── 여러 펀드를 OR로 묶은 비교 질문: 빠진 쪽만 따로 완화한다 ──────────
 #
 # 실측 근거(v4_stress H02·P09·H03·H06·H09·H10, 2026-08-30):
@@ -2604,6 +2635,37 @@ def fee_sql(state: dict) -> dict:
                         state["trace"].append(
                             f"fee_sql: 완화 재조회 실패 ({type(e).__name__})")
 
+            # 그래도 0행이면 리터럴 쪽을 본다. 위 완화는 컬럼 표현식만 바꾸고
+            # 리터럴은 그대로 두므로, 질문이 '스팍스한국엄선투자[주식]'처럼
+            # 자산군 태그를 곧바로 붙여 부르면 정식 명칭의 '증권자투자신탁'이
+            # 끼어 구조적으로 매치될 수 없다(EQ3-O5). 태그·법적 명칭을 떼고
+            # 한 번 더 조회한다. 사용자는 펀드 하나를 지목했으므로 결과가
+            # 여러 fund_name에 걸치면 모호한 매치로 보고 채택하지 않는다 —
+            # 그러면 compose의 0행 가드가 표준 문구로 착지시킨다.
+            if not rows and locals().get("relaxed"):
+                tagless = _strip_fund_literals(relaxed)
+                if tagless:
+                    try:
+                        rows3 = _run_sql_rows(tagless)
+                        parts3 = _split_where_suffix(tagless)
+                        names3 = {r["fund_name"] for r in _run_sql_rows(
+                            f"SELECT DISTINCT fund_name FROM fund_fees WHERE {parts3[1]}")} if parts3 else set()
+                    except Exception as e:                   # noqa: BLE001
+                        rows3, names3 = [], set()
+                        state["trace"].append(
+                            f"fee_sql: 리터럴 정규화 재조회 실패 ({type(e).__name__})")
+                    state["trace"].append(
+                        f"fee_sql: 0행 → 펀드명 리터럴에서 자산군 태그·법적 명칭을 "
+                        f"떼고 재조회 ({len(rows3)}행)\n  {tagless}")
+                    if len(names3) > 1:
+                        state["trace"].append(
+                            f"fee_sql: 리터럴 제거 후 {len(names3)}개 펀드에 걸침 → "
+                            f"모호한 매치로 판단, 미채택")
+                    else:
+                        if rows3:
+                            rows = rows3
+                            sql = tagless
+                        relaxed = tagless
             # 그래도 0행이고 account_type 조건이 남아 있으면 그 조건만
             # 떨어뜨리고 한 번 더. 동의어 정규화로도 못 알아본 표현이면
             # (실측: account_type='개인연금' 시절의 0행) 조건이 틀렸을 공산이
