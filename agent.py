@@ -2044,6 +2044,36 @@ def _global_code_positions(text: str) -> list:
     return kept
 
 
+def _has_class_signal(question: str) -> bool:
+    """질문에 실제로 클래스 코드를 특정할 근거가 있는지 확인한다.
+
+    실측 근거(D2-04, 2026-09-03): "미래에셋라이프사이클2030의 총보수는
+    몇 %인가요?"처럼 클래스를 전혀 언급하지 않은 질문에도 HCX가
+    class_code='C-P'를 임의로 만들어 붙여 0행 → 오답으로 이어졌다.
+    판정은 _expand_fee_select가 쓰는 것과 같은 기준을 쓴다 — 두 단계가
+    다른 기준을 쓰면 서로 모순된다. 오탐(신호 있음)은 조건을 그대로 두는
+    쪽이라 손해가 없고, 누락은 행 폭증으로 이어지므로 보수적으로 잡는다.
+    """
+    return "클래스" in question or bool(_CLASS_CODE_RE.search(question))
+
+
+def _drop_ungrounded_class_cond(sql: str, question: str) -> str:
+    """질문에 클래스 신호가 없는데 SQL에 class_code 조건이 있으면 지운다.
+
+    지우는 이유가 되는 실측 사례는 _has_class_signal 설명 참조. 조건을
+    1=1로 치환하는 이유는 OR 묶음·괄호 구조를 다시 파싱하지 않고도
+    안전하게 무력화하기 위해서다(기존 AND/OR 구조를 건드리지 않는다).
+    fund_name 조건은 여기서 손대지 않는다 — 펀드명 매칭 실패는 별개 원인이다.
+    """
+    if _has_class_signal(question):
+        return sql
+    if not (_CLASS_EQ_RE.search(sql) or _CLASS_IN_RE.search(sql)):
+        return sql
+    out = _CLASS_EQ_RE.sub("1=1", sql)
+    out = _CLASS_IN_RE.sub("1=1", out)
+    return out
+
+
 def _fallback_fund_class_sql(question: str):
     """text2sql이 fund_name 조건을 아예 안 쓴 SQL을 만들어 0행이 나왔을 때
     쓰는 최후 안전망. 질문 원문에서 알려진 펀드명과 그 옆의 클래스 코드를
@@ -2479,6 +2509,15 @@ def fee_sql(state: dict) -> dict:
             # 완화 재조회는 정규화 이전 SQL을 손봐야 한다. 정규화된 문장을
             # 다시 정규식으로 고치면 표현이 겹쳐 꼬인다.
             sql_plain = sql
+            # 질문에 근거 없는 class_code 조건 제거 (다른 정규화보다 먼저 —
+            # 클래스 정규화가 표현을 바꾸면 정규식으로 못 잡는다)
+            degrounded = _drop_ungrounded_class_cond(sql, q)
+            if degrounded != sql:
+                state["trace"].append(
+                    "fee_sql: 질문에 없는 class_code 조건을 근거 없음으로 판단해 제거"
+                    f"\n  before: {sql}\n  after:  {degrounded}")
+                sql = degrounded
+                sql_plain = degrounded
             # 계좌유형 단어가 클래스 자리에 들어왔으면 account_type으로 이관한다
             # (클래스 정규화보다 먼저 — 정규화가 표현을 바꾸면 못 잡는다)
             acct = _migrate_account_sql(sql)
