@@ -2788,6 +2788,61 @@ def tax_bracket(state: dict) -> dict:
     return state
 
 
+# ── ISA 전환납입 세액공제 한도 판정 — tax_bracket과 같은 원리 ──────────
+#
+# 실측 근거(Q-005, 2026-09-03): 근거 청크(doc23)가 "연금계좌 세액공제 납입한도는
+# 연 900만원인데 ISA 만기자금으로 300만원이 추가 공제 대상이 되면 최대
+# 1,200만원까지"라고 **명시**하는데도, 모델이 기저 한도를 연금저축 단독
+# 600만원으로 잘못 골라 600+300=900만원이라고 답하는 오류가 반복됐다.
+# H3-03과 같은 계열이다 — 사실은 맞게 인용하고 어느 한도를 쓸지에서 틀린다.
+#
+# 한도·비율은 상수로 박지 않고 **근거 문장에서 읽는다**. 근거가 요약형이라
+# 세 값(합산한도·추가공제율·추가한도)을 다 못 뽑으면 발동하지 않는다.
+# 범위는 ISA 전환납입 한 종으로 한정한다.
+
+_ISA_Q_RE = re.compile(r"ISA", re.I)
+_ISA_MOVE_RE = re.compile(r"연금(?:저축|계좌|계좌로)|전환납입|이체|옮기|입금")
+_ISA_BASE_RE = re.compile(r"연금계좌\s*세액공제\s*납입한도는?\s*연?\s*([\d,]+)\s*만원")
+_ISA_ADD_RE = re.compile(r"금액의\s*(\d+)\s*%를?\s*([\d,]+)\s*만원\s*한도로")
+
+
+def isa_credit(state: dict) -> dict:
+    """ISA 만기자금을 연금계좌로 옮길 때의 세액공제 대상 납입액을 코드로 낸다."""
+    q = state["question"]
+    if not (_ISA_Q_RE.search(q) and _ISA_MOVE_RE.search(q)):
+        return state
+    amount = _parse_won(q)
+    if amount is None:
+        return state
+    for e in state.get("evidence") or []:
+        t = re.sub(r"\s+", " ", e.get("text") or "")
+        mb, ma = _ISA_BASE_RE.search(t), _ISA_ADD_RE.search(t)
+        if not (mb and ma):
+            continue
+        base = int(mb.group(1).replace(",", "")) * 10000
+        rate = int(ma.group(1)) / 100
+        cap = int(ma.group(2).replace(",", "")) * 10000
+        extra = min(int(amount * rate), cap)
+        total = base + extra
+        f = lambda v: f"{v // 10000:,}만원"
+        note = (
+            f"[계산 결과] ISA 전환납입 세액공제 대상 납입액\n"
+            f"  기저: 연금계좌 세액공제 납입한도 {f(base)}"
+            f" (연금저축 단독 한도가 아니라 **연금계좌 합산 한도**를 씁니다)\n"
+            f"  추가: 전환금액 {f(amount)} × {ma.group(1)}% = {f(int(amount * rate))}"
+            f" → {f(cap)} 한도 적용 = {f(extra)}\n"
+            f"  합계: {f(base)} + {f(extra)} = **{f(total)}**\n"
+            f"  ※ 근거 {e.get('chunk_id')}의 수치로 코드가 계산했습니다. "
+            f"답변에서 이 값을 그대로 쓰고 다시 계산하지 마십시오.")
+        prev = state.get("calc_result")
+        state["calc_result"] = (prev + "\n\n" + note) if prev else note
+        state["trace"].append(
+            f"isa_credit: {f(base)} + min({f(int(amount*rate))}, {f(cap)}) "
+            f"= {f(total)} (근거 {e.get('chunk_id')})")
+        return state
+    return state
+
+
 # ══════════════════════════════════════════════════════════════════════
 # ③ compose — HCX-007로 답변 생성
 #
@@ -3842,6 +3897,7 @@ def run(question: str, question_id: str = "", use_cache: bool = True) -> dict:
     if state.get("route", {}).get("need_calc"):
         nodes.append(calc)
     nodes.append(tax_bracket)   # 자체 게이트 — 조건이 안 맞으면 아무것도 안 한다
+    nodes.append(isa_credit)    # 〃
     nodes.append(compose)
 
     for node in nodes:
