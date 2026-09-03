@@ -35,6 +35,8 @@ round*.json
 # 막는다. evalset_v1.json·evalset_v2.json은 접두어가 달라 안 걸린다(확인함).
 v1_*.json
 v2_*.json
+soak_*.json
+srv_*.json
 *.zip
 *.log
 
