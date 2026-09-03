@@ -2717,6 +2717,66 @@ def calc(state: dict) -> dict:
     return state
 
 
+# ── 연금소득세율 나이 구간 판정 — calc와 같은 원리의 코드 판정 ──────────
+#
+# 실측 근거(H3-03, 2026-09-03): 근거 청크가 산문으로 "만70세 ~ 79세는 4.4%"를
+# 명시하고(doc39_p0_0005, 원문과 592자 완전 동일·무절단 확인) 있는데도 HCX가
+# 만 72세에 3.3%(80세 이상 구간)를 적용하는 오류가 7/7회 재현됐다. 렌더링·검색
+# 문제가 아니라 순수 구간 선택 오류라, 프롬프트가 아니라 코드로 판정한다.
+#
+# 범위는 연금소득세율 하나뿐이다 — 세액공제율·퇴직소득세 감면율로 일반화하지
+# 않는다(검증할 테스트 케이스가 없다). 구간·세율은 상수가 아니라 **검색된
+# 근거 문장에서 읽는다**: 질문에서 나이가 정확히 하나 추출되고, 근거에 구간
+# 문장(범위형+이상형 모두)이 있을 때만 발동한다. 하나라도 없으면 개입하지
+# 않는다. 경계(69│70, 79│80)는 원문 표기가 양끝 포함이고 소득세법
+# §129①5의3(지방소득세 포함 5.5/4.4/3.3)과 정합함을 확인했다.
+
+_AGE_Q_RE = re.compile(r"만?\s*([1-9]\d)\s*(?:세|살)")
+_BRK_RANGE_RE = re.compile(
+    r"만?\s*(\d{2})\s*세?\s*[~∼]\s*만?\s*(\d{2})\s*세[는은]?\s*([0-9.]+)\s*%")
+_BRK_OVER_RE = re.compile(r"만?\s*(\d{2})\s*세\s*이상[은는]?\s*([0-9.]+)\s*%")
+
+
+def tax_bracket(state: dict) -> dict:
+    """질문의 나이를 근거 문장의 연금소득세율 구간에 코드로 대응시킨다."""
+    ages = sorted({int(m.group(1)) for m in _AGE_Q_RE.finditer(state["question"])})
+    if len(ages) != 1:
+        # 나이가 없거나 여럿(구간표 자체를 묻는 질문)이면 개입하지 않는다
+        return state
+    age = ages[0]
+    for e in state.get("evidence") or []:
+        t = re.sub(r"\s+", " ", e.get("text") or "")
+        if "연금소득세" not in t:
+            continue
+        ranges = [(int(a), int(b), r) for a, b, r in _BRK_RANGE_RE.findall(t)]
+        overs = [(int(a), r) for a, r in _BRK_OVER_RE.findall(t)]
+        if not ranges or not overs:
+            continue
+        rate = basis = None
+        for lo, hi, r in ranges:
+            if lo <= age <= hi:
+                rate, basis = r, f"만{lo}~{hi}세 구간"
+                break
+        if rate is None:
+            for lo, r in sorted(overs, reverse=True):
+                if age >= lo:
+                    rate, basis = r, f"만{lo}세 이상 구간"
+                    break
+        if rate is None:
+            continue
+        note = (f"[계산 결과] 연금소득세율 구간 판정: 질문의 만 {age}세는 근거"
+                f"({e.get('chunk_id')})의 {basis}에 해당하므로 연금소득세율 "
+                f"{rate}%가 적용됩니다.\n"
+                f"  ※ 구간·세율은 검색 근거 문장에서 읽어 코드로 판정했습니다. "
+                f"답변에서 이 세율을 그대로 쓰고 구간을 다시 고르지 마십시오.")
+        prev = state.get("calc_result")
+        state["calc_result"] = (prev + "\n\n" + note) if prev else note
+        state["trace"].append(
+            f"tax_bracket: 만{age}세 → {basis} {rate}% (근거 {e.get('chunk_id')})")
+        return state
+    return state
+
+
 # ══════════════════════════════════════════════════════════════════════
 # ③ compose — HCX-007로 답변 생성
 #
@@ -3762,6 +3822,7 @@ def run(question: str, question_id: str = "", use_cache: bool = True) -> dict:
         nodes.append(fee_sql)
     if state.get("route", {}).get("need_calc"):
         nodes.append(calc)
+    nodes.append(tax_bracket)   # 자체 게이트 — 조건이 안 맞으면 아무것도 안 한다
     nodes.append(compose)
 
     for node in nodes:

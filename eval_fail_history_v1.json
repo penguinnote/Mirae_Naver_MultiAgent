@@ -9,7 +9,9 @@
       "0903_hold_cfA",
       "0903_hold_cfB",
       "0903_hold_cfC",
-      "0903_hold_final"
+      "0903_hold_final",
+      "0903_taxbr_holdA",
+      "0903_taxbr_holdB"
     ],
     "H3-06": [
       "0903_hold_final"
@@ -18,7 +20,9 @@
       "0903_hold_cfA",
       "0903_hold_cfB",
       "0903_hold_cfC",
-      "0903_hold_final"
+      "0903_hold_final",
+      "0903_taxbr_holdA",
+      "0903_taxbr_holdB"
     ],
     "H3-13": [
       "0903_hold_final"
@@ -27,7 +31,9 @@
       "0903_hold_cfA",
       "0903_hold_cfB",
       "0903_hold_cfC",
-      "0903_hold_final"
+      "0903_hold_final",
+      "0903_taxbr_holdA",
+      "0903_taxbr_holdB"
     ],
     "H3-16": [
       "0903_hold_cfB",
@@ -37,19 +43,25 @@
       "0903_hold_cfA",
       "0903_hold_cfB",
       "0903_hold_cfC",
-      "0903_hold_final"
+      "0903_hold_final",
+      "0903_taxbr_holdA",
+      "0903_taxbr_holdB"
     ],
     "H3-19": [
       "0903_hold_cfA",
       "0903_hold_cfB",
       "0903_hold_cfC",
-      "0903_hold_final"
+      "0903_hold_final",
+      "0903_taxbr_holdA",
+      "0903_taxbr_holdB"
     ],
     "H3-20": [
       "0903_hold_cfA",
       "0903_hold_cfB",
       "0903_hold_cfC",
-      "0903_hold_final"
+      "0903_hold_final",
+      "0903_taxbr_holdA",
+      "0903_taxbr_holdB"
     ],
     "H3-21": [
       "0903_hold_final"
@@ -57,19 +69,24 @@
     "H3-22": [
       "0903_hold_cfB",
       "0903_hold_cfC",
-      "0903_hold_final"
+      "0903_hold_final",
+      "0903_taxbr_holdA"
     ],
     "H3-23": [
       "0903_hold_cfA",
       "0903_hold_cfB",
       "0903_hold_cfC",
-      "0903_hold_final"
+      "0903_hold_final",
+      "0903_taxbr_holdA",
+      "0903_taxbr_holdB"
     ],
     "H3-24": [
       "0903_hold_cfA",
       "0903_hold_cfB",
       "0903_hold_cfC",
-      "0903_hold_final"
+      "0903_hold_final",
+      "0903_taxbr_holdA",
+      "0903_taxbr_holdB"
     ],
     "Q-005": [
       "0901_channel",
@@ -93,7 +110,9 @@
       "0902_server_run3",
       "0902_title_dedup",
       "0903_revert_v1A",
-      "0903_revert_v1B"
+      "0903_revert_v1B",
+      "0903_taxbr_v1A",
+      "0903_taxbr_v1B"
     ],
     "Q-006": [
       "0818_round3",
@@ -121,7 +140,9 @@
       "0902_server_run2_cache",
       "0902_server_run3",
       "0902_title_dedup",
-      "0903_revert_v1A"
+      "0903_revert_v1A",
+      "0903_taxbr_v1A",
+      "0903_taxbr_v1B"
     ],
     "Q-011": [
       "0818_run1"
@@ -165,7 +186,9 @@
       "0902_server_run3",
       "0902_title_dedup",
       "0903_revert_v1A",
-      "0903_revert_v1B"
+      "0903_revert_v1B",
+      "0903_taxbr_v1A",
+      "0903_taxbr_v1B"
     ],
     "Q-029": [
       "0818_round3",
@@ -208,7 +231,9 @@
       "0902_server_run3",
       "0902_title_dedup",
       "0903_revert_v1A",
-      "0903_revert_v1B"
+      "0903_revert_v1B",
+      "0903_taxbr_v1A",
+      "0903_taxbr_v1B"
     ],
     "Q-031": [
       "0901_channel",
@@ -229,7 +254,9 @@
       "0902_server_run2_cache",
       "0902_title_dedup",
       "0903_revert_v1A",
-      "0903_revert_v1B"
+      "0903_revert_v1B",
+      "0903_taxbr_v1A",
+      "0903_taxbr_v1B"
     ],
     "Q-032": [
       "0818_round3",
@@ -260,7 +287,9 @@
       "0902_server_run3",
       "0902_title_dedup",
       "0903_revert_v1A",
-      "0903_revert_v1B"
+      "0903_revert_v1B",
+      "0903_taxbr_v1A",
+      "0903_taxbr_v1B"
     ],
     "Q-033": [
       "0818_round3",
@@ -299,7 +328,9 @@
       "0902_server_run3",
       "0902_title_dedup",
       "0903_revert_v1A",
-      "0903_revert_v1B"
+      "0903_revert_v1B",
+      "0903_taxbr_v1A",
+      "0903_taxbr_v1B"
     ],
     "Q-038": [
       "0901_deploy_remote",
@@ -316,7 +347,8 @@
       "0902_server_run2_cache",
       "0902_title_dedup",
       "0903_revert_v1A",
-      "0903_revert_v1B"
+      "0903_revert_v1B",
+      "0903_taxbr_v1B"
     ],
     "Q-039": [
       "0818_run1"
@@ -343,6 +375,10 @@
     "0903_hold_cfB(되돌림)": "종합 79.1 (A69.9/B86.2/C79.2/E100)",
     "0903_hold_cfC(되돌림 main)": "종합 79.1 (A69.9/B86.2/C79.2/E100)",
     "0903_revert_v1A": "77.5/95.0",
-    "0903_revert_v1B": "82.5%/95.0%"
+    "0903_revert_v1B": "82.5%/95.0%",
+    "0903_taxbr_holdA": "종합 81.2 (A74.1)",
+    "0903_taxbr_holdB": "종합 81.5 (A75.3/B86.2/C79.2/E98.3)",
+    "0903_taxbr_v1A": "82.5/95.0",
+    "0903_taxbr_v1B": "80.0/95.0"
   }
 }
