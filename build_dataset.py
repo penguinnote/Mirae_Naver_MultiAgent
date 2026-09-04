@@ -51,6 +51,13 @@ from typing import Any, Iterable
 # ──────────────────────────────────────────────────────────────────────────
 
 SKIP_DIRS = {"venv", ".venv", "__pycache__", ".git", "node_modules", "dataset", ".ipynb_checkpoints"}
+
+# 팀 내부 문서 — 색인에 들어가면 API 응답의 retrieved_context로 새어 나간다.
+# 실측(2026-09-05): 아키텍처-분석.pdf가 18청크로 들어가 평가 문항 3건에서
+# 노출됐고 BM25 상위 1위였던 문항이 5개였다. .gitignore는 git 추적만 막고
+# 이 스캔은 막지 못하므로 여기서 이름으로 제외한다.
+# 비교는 nfc()로 정규화한다 — macOS는 파일명을 NFD로 저장한다.
+SKIP_FILES = {"아키텍처-분석.pdf"}
 DOC_EXTS = {".pdf", ".docx"}
 
 # 청킹 파라미터 — RAG 검색 품질에 직결된다.
@@ -597,6 +604,8 @@ def find_docs(root: Path) -> list[Path]:
         if any(part in SKIP_DIRS for part in p.parts):
             continue
         if p.is_file() and p.suffix.lower() in DOC_EXTS and not p.name.startswith((".", "~$")):
+            if nfc(p.name) in {nfc(x) for x in SKIP_FILES}:
+                continue
             out.append(p)
     return sorted(out, key=lambda x: nfc(str(x)))
 
