@@ -2765,6 +2765,30 @@ def fee_sql(state: dict) -> dict:
             state["trace"].append(
                 f"fee_sql: SQL 실행 성공 ({len(rows)}행, "
                 f"{time.monotonic()-t0:.1f}초)\n  {sql}")
+            # 펀드를 특정하지 않은 전체 조회인데 비교·정렬·집계 신호도 없으면
+            # SQL이 답할 수 없는 개념 질문이다. 실측(EQ3-O2, 2026-09-04):
+            # "C클래스는 시간이 지나면 보수가 낮은 클래스로 바뀌나요?"에
+            # class_code LIKE 'C-%' 50행 표가 붙자 3/3 "아닙니다"로 결론이
+            # 뒤집혔고, 10행으로 줄여도 3/3 같았으며, 표를 빼면 3/3 "맞습니다"
+            # 였다. 행 수가 아니라 표의 존재가 문제라 전달하지 않는다. DB에
+            # 행이 없는 것은 아니므로 sql_empty는 세우지 않는다.
+            # 펀드 특정 여부는 WHERE 절만 본다 — SELECT 열 목록의 fund_name에
+            # 속으면 안 된다. 신호 판정에서 단독 형용사("낮은" 등)는 뺀다 —
+            # 개념 질문의 "보수가 낮은 클래스"가 비교 신호로 오인된다.
+            parts_w = _split_where_suffix(sql)
+            where_l = (parts_w[1] if parts_w else "").lower()
+            fund_specific = ("fund_name" in where_l or "fund_code" in where_l
+                             or bool(FUND_CODE_RE.search(where_l)))
+            low_q = q.lower()
+            signal = (any(c in low_q for c in SQL_COMPARE
+                          if c not in ("낮은", "높은", "싼", "저렴"))
+                      or any(k in low_q for k in SQL_SORT)
+                      or any(a in low_q for a in SQL_AGG))
+            if rows and not fund_specific and not signal:
+                state["trace"].append(
+                    f"fee_sql: 펀드 미특정 전체 조회({len(rows)}행)인데 비교·정렬·집계 "
+                    f"신호 없음 → 개념 질문으로 보고 SQL 결과를 compose에 전달하지 않음")
+                state["sql_rows"] = []
             return state
 
         except Exception as e:                               # noqa: BLE001
