@@ -735,6 +735,11 @@ def route(state: dict) -> dict:
     #
     # → 한쪽이 독식하지 못하게 제도·상품을 나눠 검색하고 합친다.
     hybrid = inst >= 1 and prod >= 1 and doc_type is None
+    # 제도 키워드만 있는데(상품 0) doc_type이 '전체'로 남은 질문도 분할한다.
+    # 실측(v3 L2·V3): 분할 없이 전체 검색하면 투자설명서가 15개를 독식해
+    # 정답 근거 doc41(세액공제 한도·율 표)이 근거에 들어오지 못했다.
+    inst_only = inst >= 1 and prod == 0 and doc_type is None
+    hybrid = hybrid or inst_only
 
     # 세법 조문 질문이면 연금문서로 좁힌 것을 풀고 투자설명서 세제 부록을
     # 2자리 확보해 준다. (TAXLAW_HINTS 위의 설명 참조)
@@ -757,7 +762,8 @@ def route(state: dict) -> dict:
         "need_calc": need_calc,
         "reason": f"제도 키워드 {inst}개 / 상품 키워드 {prod}개"
                   + (", 세법조문(투자설명서 세제부록 포함)" if tax_mix else "")
-                  + (", 복합" if hybrid and not tax_mix else "")
+                  + (", 복합" if hybrid and not tax_mix and not inst_only else "")
+                  + (", 제도 단독 분할" if inst_only else "")
                   + (", SQL 필요" if need_sql else "")
                   + (", 계산 필요" if need_calc else ""),
     }
@@ -1340,7 +1346,7 @@ class Retriever:
             #   need_sql 규칙은 신호가 팽팽할 때만 적용한다.
             if r.get("prod", 0) > r.get("inst", 0):
                 inst_n, prod_n = 2, TOP_K - 2
-            elif r.get("need_sql") or r.get("tax_mix"):
+            elif r.get("need_sql") or r.get("tax_mix") or r.get("prod", 0) == 0:
                 inst_n, prod_n = TOP_K - 2, 2
             else:
                 inst_n = prod_n = max(2, TOP_K // 2)
@@ -1371,6 +1377,8 @@ class Retriever:
                            f"→ 상품 비중↑)")
                 elif r.get("need_sql"):
                     why = " (SQL이 수치를 주므로 제도 비중↑)"
+                elif r.get("prod", 0) == 0:
+                    why = " (상품 신호 0 → 제도 비중↑)"
                 state["trace"].append(
                     f"retrieve: 복합 질문 → 제도 {len(inst_hits)}개 + "
                     f"상품 {len(prod_hits)}개로 나눠 검색" + why)
