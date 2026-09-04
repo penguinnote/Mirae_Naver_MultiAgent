@@ -17,6 +17,21 @@
 #        (.env는 이미지에 담지 않는다 — 반드시 --env-file 또는 -e로 주입)
 # 확인:  curl localhost:8000/health
 
+# ⚠ 이 이미지와 운영 서버의 환경은 완전히 같지 않다. 심사자가 빌드한
+# 컨테이너와 배포 API의 동작이 미세하게 다를 수 있어 아래에 밝혀 둔다.
+#
+#   · 의존성: 운영 서버는 requirements-lock.txt(pip freeze 정확 고정)로
+#     설치해 chromadb 1.5.9·numpy 2.5.2 등을 못박는다. 이 이미지는
+#     범위 지정인 requirements.txt를 쓰므로 빌드 시점에 따라 버전이
+#     달라질 수 있다. chromadb는 버전 간 인덱스 호환성 문제가 있다.
+#   · 인터프리터: 운영 서버는 Ubuntu 24.04의 Python 3.12.3이고
+#     이 이미지는 3.11이다.
+#
+# lock 파일로 바꾸는 편이 정확하지만, 마감 전 실제 빌드로 검증할 수단이
+# 없어(빌드 환경 부재) 적용하지 않았다. 운영과 동일한 환경을 재현하려면
+# 베이스를 python:3.12-slim으로 올리고 아래 두 줄을 requirements-lock.txt로
+# 바꾼 뒤 빌드·기동을 확인하면 된다.
+
 FROM python:3.11-slim
 
 # CLOVA API만 쓰고 poppler/tesseract 등 시스템 패키지는 필요 없다
