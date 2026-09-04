@@ -3124,6 +3124,109 @@ def isa_credit(state: dict) -> dict:
     return state
 
 
+# ── 연금계좌 세액공제액 판정 — tax_bracket·isa_credit과 같은 원리 ──────
+#
+# 실측 근거(EQ3-N4, 2026-09-03~04): "총급여 7천만원인 직장인이 연금저축에
+# 300만원, IRP에 500만원을 납입" 질문에서 모델이 두 납입액을 900만원으로
+# 잘못 합산해 118.8만원을 냈다(정답 105.6만원). 1회차엔 맞고 2회차엔 틀린,
+# 회차마다 갈리는 오류라 프롬프트로는 고쳐지지 않는다. 한도를 적용하지 않고
+# 납입액을 그냥 더하는 것이 오류의 형태다.
+#
+# 한도·세율은 상수로 박지 않고 근거 문장(doc41 표)에서 읽는다.
+# 게이트는 좁게 잡는다 — 납입액(연금저축 또는 IRP)과 소득이 **둘 다** 있고
+# 세액공제를 묻는 질문일 때만 발동한다. 소득 값이 여럿이면(한도 비교 질문)
+# 개입하지 않는다. 미탐은 기존 동작으로 돌아갈 뿐이지만, 오탐은 정보가
+# 부족한 질문에 없는 숫자를 만들어 내므로 훨씬 위험하다.
+
+_TC_ASK_RE = re.compile(r"세액공제|절세")
+_TC_AMT_RE = re.compile(r"(\d[\d,]*)\s*(천만|백만|만)\s*원")
+_TC_MULT = {"천만": 10_000_000, "백만": 1_000_000, "만": 10_000}
+_TC_IRP_KW = re.compile(r"IRP|개인형\s*퇴직연금", re.I)
+_TC_PENSION_KW = re.compile(r"연금저축")
+_TC_INCOME_KW = re.compile(r"총급여|종합소득금액|연봉")
+# doc41 표: "5,500만 원 이하 (…) | 16.5% | 연 900만 원 (연금저축 단독 600만원) | …"
+_TC_RATE_RE = re.compile(r"([\d,]+)\s*만\s*원\s*(이하|초과)[^|\n]*\|\s*([\d.]+)\s*%")
+_TC_LIMIT_RE = re.compile(
+    r"연\s*([\d,]+)\s*만\s*원\s*\(\s*연금저축\s*단독\s*([\d,]+)\s*만\s*원")
+
+
+def _tc_amounts(question: str):
+    """질문의 금액을 바로 앞 키워드로 분류한다 → (연금저축, IRP, 소득 목록)."""
+    pen = irp = None
+    incomes = []
+    for m in _TC_AMT_RE.finditer(question):
+        val = int(m.group(1).replace(",", "")) * _TC_MULT[m.group(2)]
+        head = question[max(0, m.start() - 14):m.start()]
+        if _TC_INCOME_KW.search(head):
+            incomes.append(val)
+        elif _TC_IRP_KW.search(head):
+            irp = val
+        elif _TC_PENSION_KW.search(head):
+            pen = val
+    return pen, irp, incomes
+
+
+def tax_credit(state: dict) -> dict:
+    """연금계좌 세액공제액을 코드로 계산한다. LLM에게 한도 적용을 맡기지 않는다."""
+    q = state["question"]
+    if not _TC_ASK_RE.search(q):
+        return state
+    pen, irp, incomes = _tc_amounts(q)
+    if (pen is None and irp is None) or len(incomes) != 1:
+        return state
+    income = incomes[0]
+
+    for e in state.get("evidence") or []:
+        t = re.sub(r"[ \t]+", " ", e.get("text") or "")
+        rates = _TC_RATE_RE.findall(t)
+        lim = _TC_LIMIT_RE.search(t)
+        if not rates or not lim:
+            continue
+        total_cap = int(lim.group(1).replace(",", "")) * 10000
+        pen_cap = int(lim.group(2).replace(",", "")) * 10000
+        rate = basis = None
+        for thr, direction, r in rates:
+            thr_won = int(thr.replace(",", "")) * 10000
+            if ((direction == "이하" and income <= thr_won)
+                    or (direction == "초과" and income > thr_won)):
+                rate, basis = float(r), f"{thr}만원 {direction}"
+                break
+        if rate is None:
+            continue
+
+        pen_amt, irp_amt = pen or 0, irp or 0
+        pen_eff = min(pen_amt, pen_cap)
+        eligible = min(pen_eff + irp_amt, total_cap)
+        credit = eligible * rate / 100
+        f = lambda v: f"{v / 10000:g}만원"
+        parts = []
+        if pen is not None:
+            parts.append(f"연금저축 {f(pen_amt)}"
+                         + (f"(단독한도 {f(pen_cap)} 적용 → {f(pen_eff)})"
+                            if pen_amt > pen_cap else ""))
+        if irp is not None:
+            parts.append(f"IRP {f(irp_amt)}")
+        note = (
+            f"[계산 결과] 연금계좌 세액공제액\n"
+            f"  세액공제율: 총급여 {basis} 구간이므로 {rate}%\n"
+            f"  공제 대상 납입액: {' + '.join(parts)} = {f(pen_eff + irp_amt)}"
+            + (f" → 합산한도 {f(total_cap)} 적용 = {f(eligible)}"
+               if pen_eff + irp_amt > total_cap else
+               f" (합산한도 {f(total_cap)} 이내)") + "\n"
+            f"  세액공제액: {f(eligible)} × {rate}% = **{f(credit)}**\n"
+            f"  ※ 근거 {e.get('chunk_id')}의 한도·세율로 코드가 계산했습니다. "
+            f"답변에서 이 값을 그대로 쓰고 납입액을 다시 더하거나 계산하지 "
+            f"마십시오.")
+        prev = state.get("calc_result")
+        state["calc_result"] = (prev + "\n\n" + note) if prev else note
+        state["trace"].append(
+            f"calc: 세액공제 계산 — "
+            + " + ".join(parts)
+            + f" → 공제대상 {f(eligible)} × {rate}% = {f(credit)}")
+        return state
+    return state
+
+
 # ══════════════════════════════════════════════════════════════════════
 # ③ compose — HCX-007로 답변 생성
 #
@@ -4236,6 +4339,7 @@ def run(question: str, question_id: str = "", use_cache: bool = True) -> dict:
         nodes.append(calc)
     nodes.append(tax_bracket)   # 자체 게이트 — 조건이 안 맞으면 아무것도 안 한다
     nodes.append(isa_credit)    # 〃
+    nodes.append(tax_credit)    # 〃
     nodes.append(compose)
 
     for node in nodes:
