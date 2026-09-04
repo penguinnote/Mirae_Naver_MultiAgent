@@ -513,7 +513,15 @@ _INJECTION_MARKERS = [
 ]
 
 
+# 계좌번호는 숫자만으로 잡지 않는다 — 펀드코드·금액·전화번호를 오인한다.
+# "계좌번호"라는 말과 숫자-하이픈 조합이 **함께** 있을 때만 민감정보로 본다(EQ3-T1).
+_ACCOUNT_KW_RE = re.compile(r"계좌\s?번호")
+_ACCOUNT_NUM_RE = re.compile(r"\d{2,}-\d{2,}(?:-\d{2,})?")
+
+
 def _looks_like_pii(text: str) -> bool:
+    if _ACCOUNT_KW_RE.search(text) and _ACCOUNT_NUM_RE.search(text):
+        return True
     return any(p.search(text) for p in _PII_PATTERNS)
 
 
