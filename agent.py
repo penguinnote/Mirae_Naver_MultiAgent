@@ -1049,6 +1049,30 @@ class Retriever:
             if nm:
                 _DOC_TITLES.setdefault(fc, _doc_label({"fund_name": nm}))
 
+        # 투자위험등급을 펀드코드별로 미리 뽑아 둔다. 검색 운에 맡기지
+        # 않기 위해서다. 실측(2026-09-05): 주최 예시 질의에서 KR5153420105의
+        # 등급이 적힌 1~3쪽이 근거에 안 들어와, 모델이 다른 펀드의 6등급을
+        # 가져다 붙였다. 코퍼스 네 곳이 일관되게 5등급[낮은 위험]이라 적는데도.
+        # meta에 text가 살아 있으므로 파일을 새로 읽지 않는다.
+        # 한 펀드에서 서로 다른 값이 나오면 아예 뺀다 — 틀린 등급을 확정해
+        # 주입하는 것이 지금의 환각보다 나쁘다.
+        _seen: dict = {}
+        for m in self.meta:
+            fc = m.get("fund_code")
+            if not fc:
+                continue
+            t = m.get("text") or ""
+            hits = _RISK_PRIMARY_RE.findall(t) or _RISK_FALLBACK_RE.findall(t)
+            for grade, label in hits:
+                lab = re.sub(r"\s+", " ", label).strip()
+                _seen.setdefault(fc, set()).add(f"{grade}등급[{lab}]")
+        self.risk_grades = {fc: next(iter(v)) for fc, v in _seen.items()
+                            if len(v) == 1}
+        _dropped = sum(1 for v in _seen.values() if len(v) > 1)
+        print(f"투자위험등급 사전 {len(self.risk_grades)}개 구축"
+              + (f" (값 충돌로 제외 {_dropped}개)" if _dropped else ""),
+              file=sys.stderr)
+
         # 이름 뒤에 **번호가 붙는 계열**을 따로 색인한다.
         # fund_core_index는 번호를 남기므로 라이프사이클2030과 7090이 서로
         # 다른 뿌리가 된다. 없는 번호를 짚었는지 판정하려면 번호를 뗀 색인이
@@ -3274,6 +3298,59 @@ _RECO_DISCLAIMER = (
 )
 
 
+# ── 투자위험등급 확정 주입 ────────────────────────────────────────────
+#
+# fee_sql·tax_credit과 같은 계열의 수정이다. 구조화된 사실이 검색 운에
+# 맡겨져 있으면 근거가 비는 순간 모델이 다른 펀드 값으로 메운다.
+# 지시(프롬프트)가 아니라 **근거**를 바꾼다 — 전역 규칙 추가는 이 프로젝트에서
+# 3전 3패였고(EQ3-M2 71%→0~17%), 문항 조건부 근거 주입은 회귀가 없었다.
+#
+# 발화 조건 셋을 모두 만족할 때만 붙인다. 이미 근거에 올라온 펀드의 빠진
+# 사실 한 줄을 채우는 것이지, 근거에 없던 펀드를 새로 끌어오지 않는다.
+
+_RISK_PRIMARY_RE = re.compile(
+    r"투자위험등급[^0-9]{0,20}([1-6])\s*등급\s*\[\s*([^\]]{1,12}?)\s*\]")
+_RISK_FALLBACK_RE = re.compile(
+    r"([1-6])\s*등급\s*\[\s*((?:매우\s*)?(?:높은|낮은|보통|다소\s*높은)\s*위험)\s*\]")
+_RISK_ASK_RE = re.compile(r"위험|안정|안전|보수|공격|등급|리스크")
+_RISK_MAX_FUNDS = 4
+
+
+def risk_grade(state: dict) -> dict:
+    """근거에 이미 있는 펀드의 투자위험등급을 확정 문장으로 덧붙인다."""
+    q = state.get("question") or ""
+    if not _RISK_ASK_RE.search(q):
+        return state
+    table = getattr(get_retriever(), "risk_grades", None) or {}
+    if not table:
+        return state
+
+    ev = state.get("evidence") or []
+    by_fund: dict = {}
+    for e in ev:
+        fc = e.get("fund_code")
+        if fc:
+            by_fund.setdefault(fc, []).append(e)
+
+    notes = []
+    for fc, items in by_fund.items():
+        if fc not in table or len(notes) >= _RISK_MAX_FUNDS:
+            continue
+        # 이미 근거에 등급이 적혀 있으면 건드리지 않는다
+        if any("투자위험등급" in (e.get("text") or "") for e in items):
+            continue
+        name = next((e.get("fund_name") for e in items if e.get("fund_name")), fc)
+        notes.append(f"[확정] {name}({fc}) 투자위험등급: {table[fc]}"
+                     f" — 투자설명서 기재값")
+    if not notes:
+        return state
+    state["risk_notes"] = notes
+    state["trace"].append(
+        f"risk_grade: 근거에 빠진 투자위험등급 {len(notes)}건을 확정값으로 보강 → "
+        + ", ".join(n[4:].strip() for n in notes))
+    return state
+
+
 # ══════════════════════════════════════════════════════════════════════
 # ③ compose — HCX-007로 답변 생성
 #
@@ -3701,6 +3778,8 @@ def compose(state: dict) -> dict:
         parts.append(sql_text)
     if ev:
         parts.append(format_evidence(ev))
+    if state.get("risk_notes"):
+        parts.append("\n".join(state["risk_notes"]))
     context_block = "\n\n".join(parts)
 
     # 계산·SQL 결과가 있으면 지시를 보강한다
@@ -4268,6 +4347,11 @@ def to_response(state: dict) -> dict:
         ctx_parts.append(block)
         used += len(block)
 
+    # 확정 등급은 절단 **뒤에** 붙인다. 앞에 넣으면 기존 근거를 밀어내
+    # 이 수정의 취지가 정반대로 뒤집힌다.
+    if state.get("risk_notes"):
+        ctx_parts.append("\n".join(state["risk_notes"]))
+
     # 근거 문서를 답변 끝에 붙인다 — 과제 소개자료 p.07의 요구사항이다.
     # 출처 표기를 걷어낸 **뒤에** 붙여야 한다. 제거기가 '문서명 N쪽' 꼴을
     # 지우도록 되어 있어서, 먼저 붙이면 방금 붙인 줄을 도로 지운다.
@@ -4425,6 +4509,7 @@ def run(question: str, question_id: str = "", use_cache: bool = True) -> dict:
     nodes.append(tax_bracket)   # 자체 게이트 — 조건이 안 맞으면 아무것도 안 한다
     nodes.append(isa_credit)    # 〃
     nodes.append(tax_credit)    # 〃
+    nodes.append(risk_grade)    # 〃
     nodes.append(compose)
 
     for node in nodes:
