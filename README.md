@@ -192,6 +192,20 @@ cp .env.example .env
 
 `.env`에 CLOVA Studio 키를 넣습니다. `.env`는 `agent.py`와 같은 폴더에 두세요. 파일 위치를 기준으로 읽습니다.
 
+### 데이터셋 만들기
+
+`dataset/` 산출물은 용량 때문에 저장소에 없지만 **원본 문서는 함께 올라가 있습니다**(`0.투자설명서 복사본` 100파일, `0.docs_renamed 복사본` 58파일). 저장소만 클론해도 아래 순서로 다시 만들 수 있습니다.
+
+```bash
+python build_dataset.py --input . --out ./dataset --workers 4
+python finalize_dataset.py --in ./dataset/chunks.jsonl --out ./dataset/chunks_final.jsonl
+python embed_and_index.py --selftest
+python embed_and_index.py --workers 8
+python build_fund_fees.py
+```
+
+임베딩 단계에서 CLOVA API 호출이 발생하고 문서 수만큼 시간이 걸립니다. `--selftest`로 응답 규격을 먼저 확인한 뒤 전체를 돌리세요. 결과는 `dataset/emb_cache.sqlite`에 캐싱되어 재실행 시 다시 호출하지 않습니다.
+
 ```bash
 python agent.py "퇴직연금 중도인출 사유가 뭐야?"
 python agent.py "총보수 싼 연금저축 펀드 알려줘" --show-evidence
@@ -204,6 +218,16 @@ python agent.py --selftest
 uvicorn server:app --host 127.0.0.1 --port 8000
 curl "http://127.0.0.1:8000/answer?question_id=t1&question=DC%EC%99%80%20DB%EC%9D%98%20%EC%B0%A8%EC%9D%B4"
 ```
+
+Docker로 실행하려면:
+
+```bash
+docker build -t pension-agent .
+docker run --rm -p 8000:8000 --env-file .env pension-agent
+curl localhost:8000/health
+```
+
+빌드에는 위에서 만든 `dataset/` 산출물 네 개가 있어야 합니다. `.env`는 이미지에 담지 않고 `--env-file`로 주입합니다.
 
 zsh에서는 `#`가 주석으로 처리되지 않아 명령 인자로 넘어갑니다. 이 문서의 명령은 전부 주석 없이 적었습니다.
 
@@ -382,6 +406,8 @@ GET /answer?question_id={id}&question={질의}
 - 기동 시 `agent.warmup()`으로 BM25(72MB)와 Chroma를 미리 로딩합니다. 그래야 첫 요청이 20초쯤 손해보지 않습니다.
 - `/answer` 처리 중 예외가 나도 5xx를 흘리지 않고 규격에 맞는 5필드 JSON으로 응답합니다. 평가 API에서는 5xx보다 형식이 맞는 빈 답이 재시도 낭비가 적습니다.
 - `/health`는 생존 확인용이며 평가 규격에는 없습니다.
+
+실제 채점은 배포 API(`http://211.188.59.247/answer`)로 이루어집니다. Docker 이미지는 로컬 재현·검증용입니다.
 
 배포 시 서버로 옮길 데이터는 네 개입니다(약 391MB). `chroma/`, `bm25.pkl`, `chunks_final.jsonl`, `fund_fees.sqlite`. `docs/`, `chunks.jsonl`, `emb_cache.sqlite`는 인덱스를 만들 때만 쓰므로 옮기지 않아도 됩니다. 절차는 `deploy/DEPLOY.md`에 있습니다.
 

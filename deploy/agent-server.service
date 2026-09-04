@@ -9,7 +9,7 @@
 #   6) journalctl -u agent-server -f     ← 로그 확인 (server.py의 print는 stderr로 감)
 #
 # .env는 별도로 EnvironmentFile에 넣지 않는다 — agent.py가 모듈 임포트 시점에
-# python-dotenv로 WorkingDirectory 기준 .env를 직접 읽는다 (CLAUDE.md 5장 참고).
+# python-dotenv로 WorkingDirectory 기준 .env를 직접 읽는다 (README.md 참고).
 # 그러니 .env 파일이 WorkingDirectory에 반드시 있어야 한다.
 #
 # Restart=always — 평가 기간(09.07~09.20 중 배정된 1주) 동안 무중단 운영이

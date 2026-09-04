@@ -33,8 +33,8 @@ JSON Lines. 한 줄이 청크 하나.
 
 ```
 "투자설명서"   펀드 투자설명서 (현재 14,273청크)
-"연금문서"     제도·업무 문서   (현재    305청크)
-"기타"                          (현재    167청크)
+"연금문서"     제도·업무 문서   (현재    760청크)
+"기타"                          (현재    163청크)
 ```
 
 `route()`가 질문을 보고 `doc_type="연금문서"` 또는 `"투자설명서"`로 좁힌다.
@@ -114,11 +114,12 @@ cd Mirae_Naver_MultiAgent
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 
-# .env 작성 (CLOVA 키)
+# .env 작성 — 필수 키는 다섯 개다
 CLOVA_API_KEY=...
+CLOVA_EMBED_URL=...
+CLOVA_EMBED_AUTH=bearer
 CLOVA_CHAT_REQUEST_ID=...
 CLOVA_EMBED_REQUEST_ID=...
-CLOVA_CHAT_PROFILE=maxCompletionTokens+thinking
 
 # 자기 데이터셋을 dataset/ 에 배치한 뒤
 python agent.py "퇴직연금 중도인출 사유가 뭐야?"
@@ -134,13 +135,11 @@ python diag_retrieval.py     # 검색만 확인 (HCX 미사용, 토큰 거의 �
 ### 평가 실행
 
 ```bash
-python blind_runner_integrated.py --adapter agent:answer_for_eval \
-  --questions questions_only_integrated_v1.json \
-  --out raw_결과.json --name 이름
-
-python score_official.py --raw raw_결과.json --out scored.json \
-  --gold /경로/gold_private_integrated_v1.json
+python make_raw_from_gold.py --gold {정답지경로} --out raw_run1.json --resume
+python score_official.py --raw raw_run1.json
 ```
+
+정답지 파일은 팀 blind 평가의 유효성을 지키기 위해 저장소에서 제외했다.
 
 ---
 
@@ -148,7 +147,7 @@ python score_official.py --raw raw_결과.json --out scored.json \
 
 **같은 조건을 맞춰야 의미가 있다.**
 
-- `TOP_K`(현재 8), `POOL`(60), `EVIDENCE_CHARS`(1500) 등 상수는 `agent.py` 상단에 있다.
+- `TOP_K`(현재 12), `POOL`(60), `EVIDENCE_CHARS`(1500) 등 상수는 `agent.py` 상단에 있다.
   데이터 구성이 다르면 최적값도 달라질 수 있으므로, **한쪽에만 유리한 설정이
   아닌지** 확인할 것.
 - HCX는 `temperature=0.2`라 **같은 입력에도 실행마다 답이 조금씩 달라진다.**
@@ -163,10 +162,10 @@ python score_official.py --raw raw_결과.json --out scored.json \
 ## 6. 참고 — 현재 데이터셋 규모
 
 ```
-청크         14,813
-  투자설명서  14,273 / 연금문서 305 / 기타 167
-  본문 10,882 / 표 3,863
-  개별 13,076 / 공통 1,669
-원본 문서     161개 (PDF·DOCX)
-보수 DB       363행 / 펀드 73종
+청크         15,196
+  투자설명서  14,273 / 연금문서 760 / 기타 163
+  본문 11,298 / 표 3,898
+  개별 13,527 / 공통 1,669
+원본 문서     316건 (PDF·DOCX, OK 314 / LOW_YIELD 2)
+보수 DB       576행 / 92펀드
 ```
