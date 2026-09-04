@@ -184,7 +184,19 @@ def embed_query(text: str) -> list[float]:
     return DummyEmbedder().embed(text)
 
 
+# 인덱스에 잘못 들어간 팀 내부 문서. 재빌드 없이 검색 단계에서 제외한다.
+# 벡터·BM25 양쪽 후보가 모두 matches()를 거치므로 여기 한 곳이면 완화
+# 재조회와 제도/상품 분할 배분까지 덮인다. Chroma 메타데이터에는
+# chunk_id가 없어 doc_id로 거르고, BM25 메타에는 둘 다 있어 함께 본다.
+DENY_DOC_IDS = frozenset({"아키텍처_분석"})
+DENY_CHUNK_PREFIXES = tuple(DENY_DOC_IDS)
+
+
 def matches(md: dict, fund: str | None, doc_type: str | None, ctype: str | None) -> bool:
+    if md.get("doc_id") in DENY_DOC_IDS:
+        return False
+    if str(md.get("chunk_id") or "").startswith(DENY_CHUNK_PREFIXES):
+        return False
     if ctype and md.get("content_type") != ctype:
         return False
     if doc_type and md.get("doc_type") != doc_type:
