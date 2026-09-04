@@ -1344,7 +1344,10 @@ class Retriever:
                 inst_n, prod_n = TOP_K - 2, 2
             else:
                 inst_n = prod_n = max(2, TOP_K // 2)
-            inst_hits = self._fuse(q, state["query_emb"], fund, "연금문서")[:inst_n]
+            # 제도 검색에는 fund 필터를 걸지 않는다. 연금문서 청크는 fund_code도
+            # doc_ids도 없어서, 질문에 펀드코드가 있으면 제도 검색이 구조적으로
+            # 0건이 되고 분할이 통째로 스킵됐다(D-05). 상품 검색은 그대로 좁힌다.
+            inst_hits = self._fuse(q, state["query_emb"], None, "연금문서")[:inst_n]
             prod_hits = self._fuse(q, state["query_emb"], fund, "투자설명서")[:prod_n]
             merged, seen = [], set()
             # 번갈아 담아 한 쪽이 앞자리를 다 차지하지 않게 한다
@@ -1372,6 +1375,14 @@ class Retriever:
                     f"retrieve: 복합 질문 → 제도 {len(inst_hits)}개 + "
                     f"상품 {len(prod_hits)}개로 나눠 검색" + why)
                 fused = merged
+            else:
+                # 분할이 안 켜진 이유를 남긴다. 예전에는 조용히 넘어가서
+                # 제도 검색이 fund 필터에 막혀 0건이던 것을 관측할 수 없었다.
+                empty = ("제도·상품 검색 모두 0건" if not inst_hits and not prod_hits
+                         else "제도 검색 0건" if not inst_hits else "상품 검색 0건")
+                state["trace"].append(
+                    f"retrieve: 복합 질문이지만 {empty} (제도 {len(inst_hits)}건 / "
+                    f"상품 {len(prod_hits)}건) → 분할 미적용, 기본 검색 유지")
 
         # 필터를 걸었는데 결과가 빈약하면 필터 없이 다시 (잘못 좁힌 경우 대비)
         if len(fused) < 3 and (doc_type or fund):
