@@ -3312,7 +3312,7 @@ _RISK_PRIMARY_RE = re.compile(
     r"투자위험등급[^0-9]{0,20}([1-6])\s*등급\s*\[\s*([^\]]{1,12}?)\s*\]")
 _RISK_FALLBACK_RE = re.compile(
     r"([1-6])\s*등급\s*\[\s*((?:매우\s*)?(?:높은|낮은|보통|다소\s*높은)\s*위험)\s*\]")
-_RISK_ASK_RE = re.compile(r"위험|안정|안전|보수적|공격|등급|리스크")
+_RISK_ASK_RE = re.compile(r"위험|안정|안전|보수적|공격|(?<!투자)등급|리스크")
 _RISK_MAX_FUNDS = 4
 
 
