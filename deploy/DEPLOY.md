@@ -38,7 +38,7 @@ python eval_answers.py --endpoint http://127.0.0.1:8000/answer --evalset evalset
 ```bash
 sudo apt update && sudo apt install -y python3.10-venv git nginx
 sudo mkdir -p /opt/pension-agent && sudo chown $USER /opt/pension-agent
-git clone --depth 1 https://github.com/penguinnote/Mirae_Naver_MultiAgent.git /opt/pension-agent
+git clone --depth 1 https://github.com/miraeasset-aifestival-2026-pension/pen-056.git /opt/pension-agent
 cd /opt/pension-agent
 python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
