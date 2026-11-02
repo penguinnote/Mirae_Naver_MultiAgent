@@ -24,10 +24,10 @@ PDF / DOCX  →  (텍스트 + 표 보존)  →  섹션 단위 청킹  →  chunk
     pip install pdfplumber pypdfium2 python-docx python-dotenv requests tqdm
     cp .env.example .env      # 키 입력 (OCR 안 쓸 거면 비워둬도 됨)
 
-    python build_dataset.py --input . --out ./dataset
-    python build_dataset.py --input . --out ./dataset --limit 5      # 샘플 테스트
-    python build_dataset.py --input . --out ./dataset --workers 4    # 병렬
-    python build_dataset.py --input . --out ./dataset --force        # 전체 재추출
+    python pipeline/build_dataset.py --input . --out ./dataset
+    python pipeline/build_dataset.py --input . --out ./dataset --limit 5      # 샘플 테스트
+    python pipeline/build_dataset.py --input . --out ./dataset --workers 4    # 병렬
+    python pipeline/build_dataset.py --input . --out ./dataset --force        # 전체 재추출
 """
 
 from __future__ import annotations
@@ -49,6 +49,9 @@ from typing import Any, Iterable
 # ──────────────────────────────────────────────────────────────────────────
 # 설정
 # ──────────────────────────────────────────────────────────────────────────
+
+# 저장소 루트. 이 파일은 pipeline/ 아래에 있으므로 한 단계 위다.
+ROOT = Path(__file__).resolve().parents[1]
 
 SKIP_DIRS = {"venv", ".venv", "__pycache__", ".git", "node_modules", "dataset", ".ipynb_checkpoints"}
 
@@ -257,7 +260,7 @@ class ClovaOCR:
             if not url.startswith("http"):
                 return f"CLOVA_OCR_URL이 http로 시작하지 않습니다: {url[:40]!r}"
             return ""
-        if not Path(".env").exists():
+        if not (ROOT / ".env").exists():
             return (".env 파일이 없습니다. "
                     "`cp .env.example .env` 후 URL과 Secret Key를 채우세요.")
         missing = [n for n, v in (("CLOVA_OCR_URL", url), ("CLOVA_OCR_SECRET", key)) if not v]
@@ -667,8 +670,8 @@ def merge(outdir: Path) -> tuple[int, int]:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="연금 Agent RAG 데이터셋 빌더")
-    ap.add_argument("--input", default=".", help="문서 루트 폴더")
-    ap.add_argument("--out", default="./dataset", help="결과 폴더")
+    ap.add_argument("--input", default=str(ROOT), help="문서 루트 폴더")
+    ap.add_argument("--out", default=str(ROOT / "dataset"), help="결과 폴더")
     ap.add_argument("--workers", type=int, default=1, help="병렬 프로세스 수")
     ap.add_argument("--limit", type=int, default=0, help="처음 N개만 (테스트용)")
     ap.add_argument("--force", action="store_true", help="캐시 무시하고 전체 재추출")
@@ -677,7 +680,7 @@ def main() -> None:
 
     try:
         from dotenv import load_dotenv
-        load_dotenv()
+        load_dotenv(ROOT / ".env")
     except ImportError:
         pass
 

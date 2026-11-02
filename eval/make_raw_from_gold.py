@@ -5,12 +5,12 @@
 정답은 절대 에이전트에 넘기지 않는다. gold 파일에서 question_id와 question만
 읽고, 나머지(gold_answer·required·sources)는 채점기(score_official.py)만 본다.
 
-    python make_raw_from_gold.py --gold gold_holdout_v1.json \
+    python eval/make_raw_from_gold.py --gold gold_holdout_v1.json \
         --out raw_penguinnote_holdout_v1.json
 
 중간에 끊겨도 --resume 을 붙이면 이미 답한 문항은 건너뛴다.
 
-    python make_raw_from_gold.py --gold gold_holdout_v1.json \
+    python eval/make_raw_from_gold.py --gold gold_holdout_v1.json \
         --out raw_penguinnote_holdout_v1.json --resume
 """
 from __future__ import annotations
@@ -23,6 +23,11 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+# 저장소 루트를 import 경로에 넣는다. 이 파일은 eval/ 아래에 있어서 그대로는
+# 루트 모듈(agent, search 등)을 찾지 못한다.
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 
 def git_meta() -> dict:
@@ -150,7 +155,7 @@ def main():
     except Exception:
         pass
     print("\n채점:")
-    print(f"  python score_official.py --raw {out_path.name} "
+    print(f"  python eval/score_official.py --raw {out_path.name} "
           f"--gold {Path(a.gold).name} --show 15")
 
 

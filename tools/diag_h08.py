@@ -5,19 +5,24 @@
 spotcheck6은 트레이스를 한 줄로 잘라 보여줘서 SQL이 안 보인다. 0행의 원인을
 추측하지 않고 실제 SQL을 보고 판단하기 위한 스크립트다. HCX 호출은 2~3회.
 
-    python diag_h08.py
-    python diag_h08.py H-11        (다른 문항을 보고 싶으면)
+    python tools/diag_h08.py
+    python tools/diag_h08.py H-11        (다른 문항을 보고 싶으면)
 """
 import json
 import sqlite3
 import sys
 from pathlib import Path
 
-import agent
+# 저장소 루트를 import 경로에 넣는다. 이 파일은 tools/ 아래에 있어서 그대로는
+# 루트 모듈(agent, search 등)을 찾지 못한다.
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+import agent  # noqa: E402
 
 qid = sys.argv[1] if len(sys.argv) > 1 else "H-08"
 gold = {q["question_id"]: q for q in json.loads(
-    Path("killing_camp_v1.json").read_text(encoding="utf-8"))["questions"]}
+    (ROOT / "killing_camp_v1.json").read_text(encoding="utf-8"))["questions"]}
 q = gold[qid]
 
 print(f"[{qid}] {q['question']}\n")

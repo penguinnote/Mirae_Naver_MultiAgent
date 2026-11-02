@@ -9,7 +9,10 @@
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# 저장소 루트를 import 경로에 넣는다. 이 파일은 tools/ 아래에 있어서 그대로는
+# 루트 모듈(agent, search 등)을 찾지 못한다.
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 from agent import TOP_K, get_retriever, route          # noqa: E402
 from search import POOL, embed_query                   # noqa: E402

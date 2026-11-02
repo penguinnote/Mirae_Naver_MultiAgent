@@ -1,16 +1,19 @@
 import argparse, csv, json
 from pathlib import Path
 
+# 저장소 루트. 이 파일은 eval/ 아래에 있으므로 한 단계 위다.
+ROOT = Path(__file__).resolve().parents[1]
+
 def load_results(obj):
     if isinstance(obj, dict) and "results" in obj: return obj["results"]
     if isinstance(obj, list): return obj
     raise ValueError("result JSON must be list or {'results': [...]}")
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--evalset", default="evalset_v5_gold_quality_36.json")
+ap.add_argument("--evalset", default=str(ROOT / "evalset_v5_gold_quality_36.json"))
 ap.add_argument("--result", required=True)
-ap.add_argument("--out", default="result_with_gold_v5.json")
-ap.add_argument("--csv", dest="csv_out", default="result_with_gold_v5.csv")
+ap.add_argument("--out", default=str(ROOT / "result_with_gold_v5.json"))
+ap.add_argument("--csv", dest="csv_out", default=str(ROOT / "result_with_gold_v5.csv"))
 args = ap.parse_args()
 
 ev = json.loads(Path(args.evalset).read_text(encoding="utf-8"))

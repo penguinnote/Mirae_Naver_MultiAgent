@@ -4,13 +4,16 @@
 agent.py가 문항마다 think_trace에 남긴 토큰 기록을 읽어 합산한다.
 실행이 끝난 뒤에도, 여러 실행을 나란히 비교할 때도 쓸 수 있다.
 
-    python token_report.py raw_penguinnote_integrated_v4.json
-    python token_report.py raw_v3.json raw_v4.json      # 여러 개 비교
+    python tools/token_report.py raw_penguinnote_integrated_v4.json
+    python tools/token_report.py raw_v3.json raw_v4.json      # 여러 개 비교
 """
 import json
 import re
 import sys
 from pathlib import Path
+
+# 저장소 루트. 이 파일은 tools/ 아래에 있으므로 한 단계 위다.
+ROOT = Path(__file__).resolve().parents[1]
 
 # "토큰: 입력 7,123 + 출력 412 = 7,535 (HCX 호출 2회)"
 PAT = re.compile(
@@ -27,9 +30,9 @@ def num(s):
 def report(path: Path):
     if not path.exists():
         print(f"파일이 없습니다: {path}")
-        cands = sorted(Path(".").glob("raw_*.json"))
+        cands = sorted(ROOT.glob("raw_*.json"))
         if cands:
-            print("\n이 폴더에 있는 실행 결과 파일:")
+            print("\n저장소 루트에 있는 실행 결과 파일:")
             for c in cands:
                 print(f"  {c.name}")
         print("\n토큰 기록은 집계 기능이 들어간 뒤의 실행부터 남습니다.")

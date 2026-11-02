@@ -6,10 +6,10 @@ score_official.py의 콘솔 출력은 터미널용이라 상위 15개만 보여�
 거칠다. 이 스크립트는 같은 채점 함수를 그대로 쓰되, 전 문항을 표로 정리하고
 카테고리별 집계를 붙인다.
 
-    python report_share.py --raw raw_holdout_v2.json --gold gold_holdout_v2.json
-    python report_share.py --raw ... --gold ... --all        (전 문항 정답까지)
-    python report_share.py --raw ... --gold ... --hide-gold  (정답 가림)
-    python report_share.py --raw ... --gold ... --compare raw_이전.json
+    python tools/report_share.py --raw raw_holdout_v2.json --gold gold_holdout_v2.json
+    python tools/report_share.py --raw ... --gold ... --all        (전 문항 정답까지)
+    python tools/report_share.py --raw ... --gold ... --hide-gold  (정답 가림)
+    python tools/report_share.py --raw ... --gold ... --compare raw_이전.json
 
 ⚠ --hide-gold 를 빼면 **정답과 채점 키워드가 그대로 문서에 들어간다.**
    홀드아웃 평가셋을 팀원과 공유하면 그 평가셋은 더 이상 홀드아웃이 아니다.
@@ -19,10 +19,16 @@ import argparse
 import json
 import re
 import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 
-import score_official as S
+# 저장소 루트를 import 경로에 넣는다. 이 파일은 tools/ 아래에 있어서 그대로는
+# 루트 모듈(agent, search 등)을 찾지 못한다.
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from eval import score_official as S  # noqa: E402
 
 BAR = "█"
 
@@ -203,7 +209,7 @@ def main():
     cmp_rows = S.run(Path(a.compare), Path(a.gold)) if a.compare else None
     md = build(rows, a.gold, a.raw, a.hide_gold, cmp_rows, a.all)
 
-    out = Path(a.out or f"공유_{Path(a.gold).stem}.md")
+    out = Path(a.out) if a.out else ROOT / f"공유_{Path(a.gold).stem}.md"
     out.write_text(md, encoding="utf-8")
     print(md)
     print(f"\n{'=' * 60}\n저장: {out}  ({len(md):,}자)")

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """근거 줄(※ 근거) 오프라인 검증
 
-사용법:  python check_source_line.py [프로젝트경로] [raw_*.json]
+사용법:  python tools/check_source_line.py [프로젝트경로] [raw_*.json]
 
 원래 목적: HCX 호출 없이 근거 줄만 다시 만든다.
 
@@ -18,7 +18,8 @@ import re
 import sys
 from pathlib import Path
 
-ROOT = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
+# 인자가 없으면 저장소 루트(이 파일은 tools/ 아래에 있다)를 쓴다.
+ROOT = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import agent as A  # noqa: E402
 

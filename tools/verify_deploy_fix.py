@@ -6,7 +6,7 @@
   ② 인덱스 경로 — 다른 작업 디렉터리에서 띄워도 같은 dataset/.env를 잡아야 한다
   ③ 호출 간격 — 스레드 여러 개가 동시에 들어와도 호출이 벌어져야 한다
 
-    python verify_deploy_fix.py
+    python tools/verify_deploy_fix.py
 
 ③은 call_hcx를 가짜로 바꿔치기해 호출 시각만 잰다. 실제 API는 안 부른다.
 """
@@ -15,7 +15,12 @@ import threading
 import time
 from pathlib import Path
 
-import agent
+# 저장소 루트를 import 경로에 넣는다. 이 파일은 tools/ 아래에 있어서 그대로는
+# 루트 모듈(agent, search 등)을 찾지 못한다.
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+import agent  # noqa: E402
 
 ok_all = True
 

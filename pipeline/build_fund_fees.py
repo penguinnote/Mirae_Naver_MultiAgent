@@ -24,7 +24,7 @@ SQLite 테이블(fund_fees)로 만든다.
 
 사용법
 ------
-    python build_fund_fees.py --in ./dataset/chunks_final.jsonl --db ./dataset/fund_fees.sqlite
+    python pipeline/build_fund_fees.py --in ./dataset/chunks_final.jsonl --db ./dataset/fund_fees.sqlite
 """
 
 from __future__ import annotations
@@ -35,6 +35,9 @@ import json
 import re
 import sqlite3
 from pathlib import Path
+
+# 저장소 루트. 이 파일은 pipeline/ 아래에 있으므로 한 단계 위다.
+ROOT = Path(__file__).resolve().parents[1]
 
 # ──────────────────────────────────────────────────────────────────────────
 # 클래스 코드 → 계좌유형/가입경로 매핑 (멀티에이전트-설계안.md 근거)
@@ -489,11 +492,11 @@ def infer_channel(label: str, code: str | None = None) -> str | None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="표 청크에서 fund_fees SQL 테이블 구축")
-    ap.add_argument("--in", dest="inp", default="./dataset/chunks_final.jsonl")
-    ap.add_argument("--db", default="./dataset/fund_fees.sqlite")
-    ap.add_argument("--csv", default="./dataset/fund_fees_preview.csv",
+    ap.add_argument("--in", dest="inp", default=str(ROOT / "dataset" / "chunks_final.jsonl"))
+    ap.add_argument("--db", default=str(ROOT / "dataset" / "fund_fees.sqlite"))
+    ap.add_argument("--csv", default=str(ROOT / "dataset" / "fund_fees_preview.csv"),
                     help="눈으로 확인하기 쉽게 CSV로도 저장")
-    ap.add_argument("--skipped-csv", default="./dataset/fund_fees_skipped.csv",
+    ap.add_argument("--skipped-csv", default=str(ROOT / "dataset" / "fund_fees_skipped.csv"),
                     help="'클래스+총보수'는 매칭됐지만 데이터 행을 못 뽑은 청크 목록")
     a = ap.parse_args()
 

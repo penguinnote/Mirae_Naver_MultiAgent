@@ -27,8 +27,8 @@ build_dataset.py가 만든 chunks.jsonl을 받아 **벡터 DB에 넣을 최종�
 
 사용법
 ------
-    python finalize_dataset.py --in ./dataset/chunks.jsonl --out ./dataset/chunks_final.jsonl
-    python finalize_dataset.py --in ./dataset/chunks.jsonl --exclude ncp_data_test "복사본.pdf"
+    python pipeline/finalize_dataset.py --in ./dataset/chunks.jsonl --out ./dataset/chunks_final.jsonl
+    python pipeline/finalize_dataset.py --in ./dataset/chunks.jsonl --exclude ncp_data_test "복사본.pdf"
 """
 
 from __future__ import annotations
@@ -40,6 +40,9 @@ import json
 import re
 import unicodedata
 from pathlib import Path
+
+# 저장소 루트. 이 파일은 pipeline/ 아래에 있으므로 한 단계 위다.
+ROOT = Path(__file__).resolve().parents[1]
 
 # 2개 이상의 문서가 공유하면 '공통'이다.
 #
@@ -78,8 +81,8 @@ def find_duplicate_docs(rows: list[dict]) -> dict[str, str]:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="chunks.jsonl → 임베딩용 최종본")
-    ap.add_argument("--in", dest="inp", default="./dataset/chunks.jsonl")
-    ap.add_argument("--out", dest="out", default="./dataset/chunks_final.jsonl")
+    ap.add_argument("--in", dest="inp", default=str(ROOT / "dataset" / "chunks.jsonl"))
+    ap.add_argument("--out", dest="out", default=str(ROOT / "dataset" / "chunks_final.jsonl"))
     ap.add_argument("--exclude", nargs="*", default=[],
                     help="source_path에 이 문자열이 들어가면 제외")
     ap.add_argument("--keep-duplicate-docs", action="store_true",

@@ -22,7 +22,8 @@ from collections import defaultdict
 from pathlib import Path
 
 # ── 경로 ──────────────────────────────────────────────
-BASE_DIR = Path(__file__).resolve().parent
+# 저장소 루트. 이 파일은 pipeline/ 아래에 있으므로 한 단계 위다.
+BASE_DIR = Path(__file__).resolve().parents[1]
 DATASET   = BASE_DIR / "dataset"
 DOWNLOADS = Path.home() / "Downloads" / "db"
 

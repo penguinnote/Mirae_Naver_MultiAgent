@@ -17,7 +17,10 @@ import re
 import sys
 from pathlib import Path
 
-spec = importlib.util.spec_from_file_location("so", "score_official.py")
+# 저장소 루트. 이 파일은 tools/ 아래에 있으므로 한 단계 위다.
+ROOT = Path(__file__).resolve().parents[1]
+
+spec = importlib.util.spec_from_file_location("so", ROOT / "eval" / "score_official.py")
 m = importlib.util.module_from_spec(spec)
 sys.modules["so"] = m
 spec.loader.exec_module(m)

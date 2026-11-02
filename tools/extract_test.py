@@ -101,7 +101,10 @@ def extract_text_from_docx(file_path):
 
 
 # --- 메인 실행 로직 ---
-test_folder = "./ncp_data_test"
+# 저장소 루트 기준으로 읽고 쓴다. 이 파일은 tools/ 아래에 있다.
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+test_folder = os.path.join(ROOT, "ncp_data_test")
+out_csv = os.path.join(ROOT, "tools", "extracted_dataset.csv")
 all_documents = []
 
 if not os.path.exists(test_folder):
@@ -128,7 +131,7 @@ else:
 
     if all_documents:
         df = pd.DataFrame(all_documents)
-        df.to_csv("extracted_dataset1.csv", index=False, encoding="utf-8-sig")
-        print("\n✅ 데이터 추출 완료! 'extracted_dataset1.csv'를 확인하세요.")
+        df.to_csv(out_csv, index=False, encoding="utf-8-sig")
+        print(f"\n✅ 데이터 추출 완료! '{out_csv}'를 확인하세요.")
     else:
         print("\n⚠️ 추출할 텍스트가 없습니다.")

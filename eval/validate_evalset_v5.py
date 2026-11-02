@@ -1,7 +1,10 @@
 import json, sys, hashlib
 from pathlib import Path
 
-p = Path(sys.argv[1] if len(sys.argv) > 1 else "evalset_v5_gold_quality_36.json")
+# 저장소 루트. 이 파일은 eval/ 아래에 있으므로 한 단계 위다.
+ROOT = Path(__file__).resolve().parents[1]
+
+p = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "evalset_v5_gold_quality_36.json"
 data = json.loads(p.read_text(encoding="utf-8"))
 qs = data["questions"]
 assert data["n_questions"] == len(qs), (data["n_questions"], len(qs))

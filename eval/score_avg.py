@@ -6,7 +6,7 @@ HCX는 temperature 0.2라 같은 코드로도 실행마다 답이 달라진다. 
 한 문항이 v2에서 맞고 v3에서 틀린 경우가 여러 번 나왔다. 그래서 한 번
 실행한 점수로 "좋아졌다/나빠졌다"를 말하면 노이즈를 성능으로 착각한다.
 
-    python score_avg.py raw_a.json raw_b.json raw_c.json --gold gold_holdout_v1.json
+    python eval/score_avg.py raw_a.json raw_b.json raw_c.json --gold gold_holdout_v1.json
 
 문항별로 몇 번 맞았는지(안정/불안정)까지 같이 보여준다. 팀원과 비교하기
 전에 **내 점수의 오차 범위**를 알아야 비교가 의미를 갖는다.

@@ -449,7 +449,7 @@ q("Q-040",
 # ══════════════════════════════════════════════════════════════════════
 
 def main():
-    out = Path(__file__).parent / "evalset_v1.json"
+    out = Path(__file__).resolve().parent / "sets" / "evalset_v1.json"
     payload = {
         "version": "v1",
         "created": "2026-08-17",

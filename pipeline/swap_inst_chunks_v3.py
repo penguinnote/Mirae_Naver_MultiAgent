@@ -2,8 +2,8 @@
 3단계: Chroma 제도 벡터 교체 + 청크 파일 교체 + BM25 재생성.
 
 사용법:
-    venv/bin/python swap_inst_chunks_v3.py              # dry-run (기본, 안전)
-    venv/bin/python swap_inst_chunks_v3.py --apply       # 실제 변경
+    venv/bin/python pipeline/swap_inst_chunks_v3.py              # dry-run (기본, 안전)
+    venv/bin/python pipeline/swap_inst_chunks_v3.py --apply       # 실제 변경
 """
 
 import argparse
@@ -13,7 +13,8 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent
+# 저장소 루트. 이 파일은 pipeline/ 아래에 있으므로 한 단계 위다.
+BASE_DIR = Path(__file__).resolve().parents[1]
 DATASET = BASE_DIR / "dataset"
 BACKUP = Path.home() / "dev" / "backup_20260831"
 
@@ -295,7 +296,7 @@ def main():
     if not args.apply:
         print("\n" + "=" * 60)
         print("🔒 dry-run 모드입니다. 아무것도 변경하지 않았습니다.")
-        print("   실제 적용하려면:  venv/bin/python swap_inst_chunks_v3.py --apply")
+        print("   실제 적용하려면:  venv/bin/python pipeline/swap_inst_chunks_v3.py --apply")
         print("=" * 60)
         return
 

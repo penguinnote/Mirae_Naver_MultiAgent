@@ -5,7 +5,7 @@ PenguinNote/eval_answers.py 결과 JSON + gold evalset을 병합해
 질문 / 모델답변 / 정답 / answer_points / 1차채점 / 실패타깃을 한 파일로 만든다.
 
 Usage:
-  python merge_eval_result_with_gold_v4.py \
+  python eval/merge_eval_result_with_gold_v4.py \
     --evalset evalset_v4_stress_36.json \
     --result result_penguinnote_v4_stress36.json \
     --out result_with_gold_v4_stress36.json \

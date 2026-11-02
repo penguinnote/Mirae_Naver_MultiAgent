@@ -20,8 +20,8 @@ FAIRNESS_AND_SCORING.md(팀 자체 제작, 대회 주최측 공지 아님)에 �
 
 사용법
 ------
-    python score_official.py --raw raw_penguinnote_integrated_v2.json
-    python score_official.py --raw new.json --compare old.json
+    python eval/score_official.py --raw raw_penguinnote_integrated_v2.json
+    python eval/score_official.py --raw new.json --compare old.json
 """
 from __future__ import annotations
 
@@ -30,12 +30,15 @@ import json
 import re
 from pathlib import Path
 
+# 저장소 루트. 이 파일은 eval/ 아래에 있으므로 한 단계 위다.
+ROOT = Path(__file__).resolve().parents[1]
+
 GOLD_NAME = "gold_private_integrated_v1.json"
 
 # 정답지를 흔히 두는 위치들을 훑는다. --gold 로 직접 지정할 수도 있다.
 _GOLD_CANDIDATES = [
-    Path.cwd() / GOLD_NAME,
-    Path.cwd() / "mirae_integrated_blind_v1_ANSWERS_ONLY" / GOLD_NAME,
+    ROOT / GOLD_NAME,
+    ROOT / "mirae_integrated_blind_v1_ANSWERS_ONLY" / GOLD_NAME,
     Path.home() / "Downloads" / "mirae_integrated_blind_v1_ANSWERS_ONLY" / GOLD_NAME,
     Path.home() / "Downloads" / GOLD_NAME,
     Path.home() / "Desktop" / "mirae_integrated_blind_v1_ANSWERS_ONLY" / GOLD_NAME,

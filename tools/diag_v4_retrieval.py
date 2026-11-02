@@ -6,7 +6,7 @@
 흔들리지 않고, 검색 쪽 수정의 효과를 노이즈 없이 그대로 보여준다.
 질의 임베딩만 부르므로 토큰도 거의 안 든다.
 
-    python diag_v4_retrieval.py
+    python tools/diag_v4_retrieval.py
 
 정답지의 sources(fund_code + page)가 상위 근거 안에 들어왔는지 센다.
 """
@@ -15,8 +15,13 @@ import os
 import sys
 from pathlib import Path
 
+# 저장소 루트를 import 경로에 넣는다. 이 파일은 tools/ 아래에 있어서 그대로는
+# 루트 모듈(agent, search 등)을 찾지 못한다.
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
 GOLD_CANDIDATES = [
-    Path("gold_private_v4.json"),
+    ROOT / "gold_private_v4.json",
     Path.home() / "Downloads/mirae_blind_eval_v4_EVALUATOR_PRIVATE/gold_private_v4.json",
 ]
 

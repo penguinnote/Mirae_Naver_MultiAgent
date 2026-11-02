@@ -18,7 +18,7 @@
 
     여러분 시스템을 어떻게든 돌려서 아래 형식의 JSON을 만든 뒤 채점합니다.
 
-        python eval_answers.py --results my_results.json
+        python eval/eval_answers.py --results my_results.json
 
     my_results.json 형식 (평가 API 응답 규격과 동일):
 
@@ -43,13 +43,13 @@
 
     그리고 실행합니다.
 
-        python eval_answers.py --adapter my_agent:answer
+        python eval/eval_answers.py --adapter my_agent:answer
 
     함수가 문자열만 반환해도 됩니다. 그럼 그게 answer로 취급됩니다.
 
 【3】 배포한 API 엔드포인트 직접 호출 — 제출 직전 점검용
 
-        python eval_answers.py --endpoint http://123.45.67.89/answer
+        python eval/eval_answers.py --endpoint http://123.45.67.89/answer
 
     주최측이 실제로 보낼 요청과 똑같은 형태(GET, 헤더 없음, question_id·question
     쿼리 파라미터)로 호출합니다. 그래서 정확도뿐 아니라 아래도 같이 점검합니다.
@@ -84,10 +84,15 @@ import urllib.request
 from collections import defaultdict
 from pathlib import Path
 
+# 저장소 루트를 import 경로에 넣는다. 이 파일은 eval/ 아래에 있어서 그대로는
+# 루트 모듈(agent, search 등)을 찾지 못한다.
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
 TIMEOUT_LIMIT = 300  # 주최측 규정
 
 
-def load_env(path: str = ".env") -> int:
+def load_env(path: str = str(ROOT / ".env")) -> int:
     """.env를 표준 라이브러리만으로 읽는다.
 
     python-dotenv를 쓰면 설치 의존성이 생긴다. 이 도구는 팀원 누구나
@@ -238,7 +243,7 @@ def main():
     src.add_argument("--results", help="결과 JSON 파일 경로")
     src.add_argument("--adapter", help="'module:function' 형식의 파이썬 함수")
     src.add_argument("--endpoint", help="배포한 /answer 엔드포인트 URL")
-    ap.add_argument("--evalset", default="./evalset_v1.json")
+    ap.add_argument("--evalset", default=str(ROOT / "eval" / "sets" / "evalset_v1.json"))
     ap.add_argument("--type", help="특정 유형만 (예: 세제)")
     ap.add_argument("--show", action="store_true", help="답변 전문 출력")
     ap.add_argument("--out", help="채점 결과 저장 경로")
@@ -252,7 +257,7 @@ def main():
     ep = Path(a.evalset)
     if not ep.exists():
         sys.exit(f"평가셋을 찾을 수 없습니다: {ep}\n"
-                 f"evalset_v1.json을 이 폴더에 두거나 --evalset 로 경로를 주세요.")
+                 f"eval/sets/evalset_v1.json이 있는지 확인하거나 --evalset 로 경로를 주세요.")
     questions = json.loads(ep.read_text(encoding="utf-8"))["questions"]
     if a.type:
         questions = [q for q in questions if q["query_type"] == a.type]
@@ -376,7 +381,7 @@ def main():
         if empty:
             print(f"\n  답변이 빈 문항 {len(empty)}건: {empty[:8]}")
         print("\n  자주 있는 원인")
-        print("    · .env를 못 읽음 → 실행 위치가 .env가 있는 폴더인지 확인")
+        print("    · .env를 못 읽음 → 저장소 루트에 .env가 있는지 확인")
         print("    · API 키·REQUEST_ID 누락 → 각 시스템의 selftest로 먼저 확인")
         print("    · 인덱스/DB 경로가 다름")
         print("\n  이 상태의 점수는 성능이 아니라 고장입니다. 고친 뒤 다시 돌리세요.")

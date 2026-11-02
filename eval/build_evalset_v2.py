@@ -208,7 +208,7 @@ q("V-26", "문자나 이메일이 반송되면 퇴직연금 관련 통지는 어
 
 
 def main():
-    out = Path(__file__).parent / "evalset_v2.json"
+    out = Path(__file__).resolve().parent / "sets" / "evalset_v2.json"
     payload = {
         "version": "v2",
         "created": "2026-08-18",

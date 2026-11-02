@@ -41,17 +41,17 @@ SQL 문항은 검색이 아니라 expected_sql이 실제로 결과를 뱉는지 
 ------
 data_test 폴더에서 실행한다.
 
-    python run_eval.py --compare
+    python eval/run_eval.py --compare
         hybrid/vector/bm25 × k=5,10,20 을 한 번에 비교. 여기서 시작할 것.
         질의 임베딩을 문항당 1회만 하므로 따로 9번 돌리는 것보다 훨씬 빠르다.
 
-    python run_eval.py
+    python eval/run_eval.py
         하이브리드 k=5 상세 (문항별 ✅/❌와 누락된 근거를 보여준다)
 
-    python run_eval.py --detail
+    python eval/run_eval.py --detail
         실패 문항이 무엇을 대신 가져왔는지까지 출력
 
-    python run_eval.py --out result.json
+    python eval/run_eval.py --out result.json
         결과 저장. 개선 전후 비교에 쓴다.
 
 zsh 주의: 명령 뒤에 # 주석을 붙이지 말 것. zsh는 이를 인자로 넘겨 에러가 난다.
@@ -70,7 +70,10 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# 저장소 루트를 import 경로에 넣는다. 이 파일은 eval/ 아래에 있어서 그대로는
+# 루트 모듈(agent, search 등)을 찾지 못한다.
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 # search.py에서 검증된 로직을 그대로 재사용한다.
 # 평가용으로 검색 로직을 따로 구현하면 "평가는 통과하는데 실제로는 다른 코드"가 된다.
@@ -236,12 +239,12 @@ def run_compare(questions, col, bm25, meta, text_of, a):
 
 def main():
     ap = argparse.ArgumentParser(description="평가셋으로 검색 정확도 측정")
-    ap.add_argument("--evalset", default="./evalset_v1.json")
-    ap.add_argument("--db", default="./dataset/chroma")
+    ap.add_argument("--evalset", default=str(ROOT / "eval" / "sets" / "evalset_v1.json"))
+    ap.add_argument("--db", default=str(ROOT / "dataset" / "chroma"))
     ap.add_argument("--collection", default="pension")
-    ap.add_argument("--chunks", default="./dataset/chunks_final.jsonl")
-    ap.add_argument("--bm25-cache", default="./dataset/bm25.pkl")
-    ap.add_argument("--fees-db", default="./dataset/fund_fees.sqlite")
+    ap.add_argument("--chunks", default=str(ROOT / "dataset" / "chunks_final.jsonl"))
+    ap.add_argument("--bm25-cache", default=str(ROOT / "dataset" / "bm25.pkl"))
+    ap.add_argument("--fees-db", default=str(ROOT / "dataset" / "fund_fees.sqlite"))
     ap.add_argument("-k", type=int, default=5)
     ap.add_argument("--vector-only", action="store_true")
     ap.add_argument("--bm25-only", action="store_true")
@@ -254,7 +257,7 @@ def main():
 
     try:
         from dotenv import load_dotenv
-        load_dotenv()
+        load_dotenv(ROOT / ".env")
     except ImportError:
         pass
 
