@@ -24,7 +24,6 @@ __pycache__/
 0.*/
 *투자설명서*/
 *docs_renamed*/
-ncp_data_test/
 
 # 비공개 정답·평가 실행 결과·리포트
 gold_private_*.json

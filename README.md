@@ -4,7 +4,30 @@
 
 평가용 엔드포인트: `http://211.188.59.247/answer`
 운영 기간: 2026-09-07 ~ 09-30
-심사 대상 코드 커밋: `af91008` (배포 서버가 이 해시로 동작합니다. 이후 커밋은 문서 전용입니다)
+심사 대상 코드 커밋: `af91008` (배포 서버가 이 해시로 동작합니다. 이후 커밋은 문서 수정과 폴더 정리이며, 런타임 파일 `agent.py`·`server.py`·`search.py`·`embed_and_index.py`는 이 해시와 같습니다)
+
+## 폴더 구조
+
+```
+.
+├── agent.py               에이전트 본체 (노드 · 오케스트레이션 · HCX 클라이언트)
+├── server.py              평가 API (FastAPI)
+├── search.py              하이브리드 검색 (벡터 + BM25 → RRF)
+├── embed_and_index.py     CLOVA 임베딩 → Chroma · BM25 인덱스
+├── pipeline/              인덱스 구축 (문서 → 청크 → 중복 제거 → 수수료 테이블)
+├── eval/                  평가셋 생성 · 채점 · 실행 간 비교
+│   └── sets/              공개 평가셋 (evalset_v1 · v2, 실패 이력)
+├── tools/                 진단 · 점검 스크립트
+├── docs/                  API 명세 · 데이터 스키마
+├── deploy/                NCP 배포 (nginx · systemd · 가이드)
+├── dataset/               인덱스 산출물 (대부분 로컬에서 생성, 저장소 밖)
+├── 0.투자설명서 복사본/    원본 투자설명서
+├── 0.docs_renamed 복사본/  원본 연금 제도 문서
+├── Dockerfile · requirements.txt · requirements-lock.txt
+└── 기술제안서.md
+```
+
+`pipeline/`·`eval/`·`tools/`의 스크립트는 저장소 루트에서 `python eval/run_eval.py`처럼 실행합니다. 기본 입출력 경로가 저장소 루트 기준이라 다른 폴더에서 실행해도 같은 파일을 읽고 씁니다.
 
 ---
 
@@ -61,12 +84,12 @@ flowchart TD
 ```mermaid
 flowchart LR
     DOC["PDF · DOCX<br/>160개 문서"]
-    B1["build_dataset.py<br/>파싱 · 표 추출 · 청킹"]
+    B1["pipeline/build_dataset.py<br/>파싱 · 표 추출 · 청킹"]
     C1["chunks.jsonl<br/>35,007 청크"]
-    B2["finalize_dataset.py<br/>법정 공통문구 중복 제거"]
+    B2["pipeline/finalize_dataset.py<br/>법정 공통문구 중복 제거"]
     C2["chunks_final.jsonl<br/>15,196 청크"]
     B3["embed_and_index.py<br/>CLOVA 임베딩 + 인덱싱"]
-    B4["build_fund_fees.py<br/>수수료 표 → 정규화 테이블"]
+    B4["pipeline/build_fund_fees.py<br/>수수료 표 → 정규화 테이블"]
     OUT1[("Chroma + bm25.pkl")]
     OUT2[("fund_fees.sqlite")]
 
@@ -170,7 +193,7 @@ LLM이 만든 SQL은 문법은 맞는데 리터럴이 DB의 실제 값과 어긋
 
 "근거를 붙였나"가 아니라 정답 핵심어가 `retrieved_context`에 실제로 들어왔는지를 봅니다. 그래서 근거 제공률이 정답률보다 높으면 검색은 됐는데 생성이 그 근거를 쓰지 못한 것으로 읽습니다.
 
-측정값이 흔들리는 쪽은 검색이 아니라 생성입니다. 검색은 임베딩과 BM25라 온도가 없어 결정적이고, 여러 번 돌려도 출처 점수가 소수점까지 같습니다. 회귀를 판단할 때는 `score_avg.py`로 오차범위를 먼저 잡고 비교합니다.
+측정값이 흔들리는 쪽은 검색이 아니라 생성입니다. 검색은 임베딩과 BM25라 온도가 없어 결정적이고, 여러 번 돌려도 출처 점수가 소수점까지 같습니다. 회귀를 판단할 때는 `eval/score_avg.py`로 오차범위를 먼저 잡고 비교합니다.
 
 ### 데이터 규모
 
@@ -202,11 +225,11 @@ cp .env.example .env
 `dataset/` 산출물은 용량 때문에 저장소에 없지만 **원본 문서는 함께 올라가 있습니다**(`0.투자설명서 복사본` 100파일, `0.docs_renamed 복사본` 58파일). 저장소만 클론해도 아래 순서로 다시 만들 수 있습니다.
 
 ```bash
-python build_dataset.py --input . --out ./dataset --workers 4
-python finalize_dataset.py --in ./dataset/chunks.jsonl --out ./dataset/chunks_final.jsonl
+python pipeline/build_dataset.py --input . --out ./dataset --workers 4
+python pipeline/finalize_dataset.py --in ./dataset/chunks.jsonl --out ./dataset/chunks_final.jsonl
 python embed_and_index.py --selftest
 python embed_and_index.py --workers 8
-python build_fund_fees.py
+python pipeline/build_fund_fees.py
 ```
 
 임베딩 단계에서 CLOVA API 호출이 발생하고 문서 수만큼 시간이 걸립니다. `--selftest`로 응답 규격을 먼저 확인한 뒤 전체를 돌리세요. 결과는 `dataset/emb_cache.sqlite`에 캐싱되어 재실행 시 다시 호출하지 않습니다.
@@ -254,43 +277,52 @@ zsh에서는 `#`가 주석으로 처리되지 않아 명령 인자로 넘어갑�
 
 | 파일 | 역할 |
 |---|---|
-| `build_dataset.py` | PDF·DOCX → `chunks.jsonl`. 표는 마크다운으로 보존, 스캔본은 OCR |
-| `finalize_dataset.py` | 법정 공통문구 중복 제거 → `chunks_final.jsonl` |
-| `embed_and_index.py` | CLOVA 임베딩 → Chroma + BM25 |
-| `build_fund_fees.py` | 수수료 표 청크 → `fund_fees.sqlite` |
+| `pipeline/build_dataset.py` | PDF·DOCX → `chunks.jsonl`. 표는 마크다운으로 보존, 스캔본은 OCR |
+| `pipeline/finalize_dataset.py` | 법정 공통문구 중복 제거 → `chunks_final.jsonl` |
+| `embed_and_index.py` | CLOVA 임베딩 → Chroma + BM25. `search.py`가 임포트하므로 루트에 둔다 |
+| `pipeline/build_fund_fees.py` | 수수료 표 청크 → `fund_fees.sqlite` |
+| `pipeline/build_inst_chunks_v3.py` · `pipeline/swap_inst_chunks_v3.py` | 제도 문서 청크 v3 생성과 라이브 인덱스 교체(기본 dry-run) |
 
 ### 평가·진단
 
 | 파일 | 역할 |
 |---|---|
-| `eval_answers.py` | 답변 채점. 표준 라이브러리만 사용. 어댑터·엔드포인트 양쪽 지원 |
-| `score_official.py` | 팀 자체 배점 가정으로 채점 + 실행 간 비교. 대회 공지 배점이 아니다 |
-| `score_avg.py` | 반복 실행의 평균과 오차범위. 노이즈와 회귀를 가른다 |
-| `make_raw_from_gold.py` | 정답지에서 질문만 뽑아 실행. `--resume` 지원 |
-| `run_eval.py` | 검색 계층만 측정 (하이브리드 / 벡터 / BM25) |
-| `diag_v4_retrieval.py` | 검색만 재는 결정적 진단. HCX를 호출하지 않는다 |
-| `token_report.py` | 실행 한 번의 입력·출력 토큰 집계 |
+| `eval/eval_answers.py` | 답변 채점. 표준 라이브러리만 사용. 어댑터·엔드포인트 양쪽 지원 |
+| `eval/score_official.py` | 팀 자체 배점 가정으로 채점 + 실행 간 비교. 대회 공지 배점이 아니다 |
+| `eval/score_avg.py` | 반복 실행의 평균과 오차범위. 노이즈와 회귀를 가른다 |
+| `eval/make_raw_from_gold.py` | 정답지에서 질문만 뽑아 실행. `--resume` 지원 |
+| `eval/run_eval.py` | 검색 계층만 측정 (하이브리드 / 벡터 / BM25) |
+| `eval/build_evalset.py` · `eval/build_evalset_v2.py` | 평가셋 v1·v2 생성 → `eval/sets/` |
+| `eval/merge_*.py` · `eval/validate_evalset_v5.py` | 실행 결과와 정답지 병합, 평가셋 형식 검증 |
+| `eval/sets/` | `evalset_v1.json`(40문항) · `evalset_v2.json`(26문항) · `eval_fail_history_v1.json` |
+| `tools/diag_v4_retrieval.py` | 검색만 재는 결정적 진단. HCX를 호출하지 않는다 |
+| `tools/diag_retrieval.py` · `tools/diag_h08.py` | 검색 후보 순위 진단, 단일 문항 전체 트레이스 |
+| `tools/token_report.py` | 실행 한 번의 입력·출력 토큰 집계 |
+| `tools/report_share.py` · `tools/audit_norm.py` | 팀 공유용 채점 리포트, 채점기 정규화 오탐 검사 |
+| `tools/check_source_line.py` · `tools/verify_deploy_fix.py` | 출처 줄 생성 점검, 배포 전 수정사항을 HCX 없이 점검 |
+| `tools/extract_test.py` | 초기 OCR 추출 실험 (산출물 `tools/extracted_dataset.csv`). 현재 파이프라인은 `pipeline/build_dataset.py` |
 
 ### 문서
 
 | 파일 | 역할 |
 |---|---|
 | `기술제안서.md` | 제출용 기술 제안서 |
-| `DATA_INTERFACE.md` | 청크 스키마와 `fund_fees` 스키마 |
+| `docs/API.md` | 평가 API 요청·응답 명세 |
+| `docs/DATA_INTERFACE.md` | 청크 스키마와 `fund_fees` 스키마 |
 
 ---
 
 ## 파이프라인 상세
 
-### 1단계 — 문서를 청크로 (`build_dataset.py`)
+### 1단계 — 문서를 청크로 (`pipeline/build_dataset.py`)
 
 PDF·DOCX를 검색용 JSONL로 변환합니다.
 
 통합 txt나 엑셀이 아닌 이유는 출처 추적입니다. 연금·펀드 도메인에서는 "이 수수료율이 어느 펀드 몇 페이지에서 나왔는지"를 답변에 달 수 있어야 하는데, 통합 txt는 그 정보를 구조적으로 잃습니다. 엑셀은 셀 길이 제한과 줄바꿈 깨짐으로 수천 자 본문을 안전하게 담지 못합니다.
 
 ```bash
-python build_dataset.py --input . --out ./dataset --limit 5     # 먼저 5개만
-python build_dataset.py --input . --out ./dataset --workers 4   # 전체
+python pipeline/build_dataset.py --input . --out ./dataset --limit 5     # 먼저 5개만
+python pipeline/build_dataset.py --input . --out ./dataset --workers 4   # 전체
 ```
 
 중단됐다면 같은 명령을 다시 실행하세요. 끝난 문서는 건너뜁니다. 추출 로직을 고쳤다면 `--force`를 붙입니다.
@@ -326,14 +358,13 @@ python build_dataset.py --input . --out ./dataset --workers 4   # 전체
 | `LOW_YIELD` | 페이지 대비 추출량 부족 | 해당 문서 육안 확인 |
 | `ERROR` | 파싱 실패 | `error` 열 확인 |
 
-`fund_name`이나 `base_date`가 빈 투자설명서는 운용사별 서식 차이입니다. `build_dataset.py`의 `RE_FUND_NAME`, `RE_BASE_DATE`에 패턴을 추가하세요.
+`fund_name`이나 `base_date`가 빈 투자설명서는 운용사별 서식 차이입니다. `pipeline/build_dataset.py`의 `RE_FUND_NAME`, `RE_BASE_DATE`에 패턴을 추가하세요.
 
-### 2단계 — 중복 제거 (`finalize_dataset.py`)
+### 2단계 — 중복 제거 (`pipeline/finalize_dataset.py`)
 
 ```bash
-python finalize_dataset.py --in ./dataset/chunks.jsonl \
-                           --out ./dataset/chunks_final.jsonl \
-                           --exclude ncp_data_test
+python pipeline/finalize_dataset.py --in ./dataset/chunks.jsonl \
+                                    --out ./dataset/chunks_final.jsonl
 ```
 
 투자설명서 100개는 자본시장법이 요구하는 동일한 법정 문구를 공유합니다. 그대로 임베딩하면 같은 문장을 최대 24번 임베딩하게 되고, "수익자총회가 뭐야?"라는 질문에 똑같은 청크 24개가 상위를 채웁니다.
@@ -392,12 +423,12 @@ python search.py "중도인출" --json
 ### 5단계 — 평가
 
 ```bash
-python eval_answers.py --adapter agent:answer_for_eval --evalset evalset_v1.json --show
-python make_raw_from_gold.py --gold {정답지경로} --out raw_run1.json --resume
-python score_official.py --raw raw_run1.json --compare raw_이전실행.json
+python eval/eval_answers.py --adapter agent:answer_for_eval --evalset eval/sets/evalset_v1.json --show
+python eval/make_raw_from_gold.py --gold {정답지경로} --out raw_run1.json --resume
+python eval/score_official.py --raw raw_run1.json --compare raw_이전실행.json
 ```
 
-`--compare`는 문항별로 좋아진 것과 나빠진 것을 갈라 보여줍니다. 회귀인지 노이즈인지 판단하려면 `score_avg.py`로 같은 코드 반복 실행의 오차범위를 먼저 잡으세요. 그 범위 안의 변화는 회귀가 아닙니다.
+`--compare`는 문항별로 좋아진 것과 나빠진 것을 갈라 보여줍니다. 회귀인지 노이즈인지 판단하려면 `eval/score_avg.py`로 같은 코드 반복 실행의 오차범위를 먼저 잡으세요. 그 범위 안의 변화는 회귀가 아닙니다.
 
 ### 6단계 — 평가 API (`server.py`, `deploy/`)
 
@@ -406,7 +437,7 @@ GET /answer?question_id={id}&question={질의}
 → {question_id, question, retrieved_context, think_trace, answer}
 ```
 
-다섯 필드는 모두 문자열입니다. 상세 명세는 `API.md`에 있습니다.
+다섯 필드는 모두 문자열입니다. 상세 명세는 `docs/API.md`에 있습니다.
 
 - 기동 시 `agent.warmup()`으로 BM25(72MB)와 Chroma를 미리 로딩합니다. 그래야 첫 요청이 20초쯤 손해보지 않습니다.
 - `/answer` 처리 중 예외가 나도 5xx를 흘리지 않고 규격에 맞는 5필드 JSON으로 응답합니다. 평가 API에서는 5xx보다 형식이 맞는 빈 답이 재시도 낭비가 적습니다.
@@ -418,7 +449,7 @@ GET /answer?question_id={id}&question={질의}
 
 ## 튜닝 포인트
 
-`build_dataset.py` 상단 상수만 바꾸면 됩니다.
+`pipeline/build_dataset.py` 상단 상수만 바꾸면 됩니다.
 
 ```python
 CHUNK_TARGET   = 900

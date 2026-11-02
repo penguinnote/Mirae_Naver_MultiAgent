@@ -8,8 +8,8 @@
 #
 # 빌드에는 dataset/ 아래 4개 산출물이 이미 만들어져 있어야 한다
 # (chroma/, bm25.pkl, chunks_final.jsonl, fund_fees.sqlite — 총 ~391MB).
-# 이들은 .gitignore/.dockerignore 대상이라 저장소에는 없다. build_dataset.py
-# → embed_and_index.py → build_fund_fees.py 파이프라인으로 먼저 만들거나,
+# 이들은 .gitignore/.dockerignore 대상이라 저장소에는 없다. pipeline/build_dataset.py
+# → embed_and_index.py → pipeline/build_fund_fees.py 파이프라인으로 먼저 만들거나,
 # 이미 만들어 둔 dataset/ 폴더를 이 Dockerfile과 같은 곳에 두고 빌드한다.
 #
 # 빌드:  docker build -t pension-agent .

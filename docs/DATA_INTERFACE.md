@@ -128,15 +128,15 @@ python agent.py "퇴직연금 중도인출 사유가 뭐야?"
 ### 규격이 맞는지 먼저 확인
 
 ```bash
-python diag_retrieval.py     # 검색만 확인 (HCX 미사용, 토큰 거의 안 듦)
+python tools/diag_retrieval.py     # 검색만 확인 (HCX 미사용, 토큰 거의 안 듦)
 ```
 `후보 N개`가 0으로 나오면 `doc_type` 값이나 Chroma 컬렉션명을 확인할 것.
 
 ### 평가 실행
 
 ```bash
-python make_raw_from_gold.py --gold {정답지경로} --out raw_run1.json --resume
-python score_official.py --raw raw_run1.json
+python eval/make_raw_from_gold.py --gold {정답지경로} --out raw_run1.json --resume
+python eval/score_official.py --raw raw_run1.json
 ```
 
 정답지 파일은 팀 blind 평가의 유효성을 지키기 위해 저장소에서 제외했다.
@@ -153,7 +153,7 @@ python score_official.py --raw raw_run1.json
 - HCX는 `temperature=0.2`라 **같은 입력에도 실행마다 답이 조금씩 달라진다.**
   실측으로 검색 결과가 완전히 동일한데 점수가 33%p 차이 난 문항이 있었다.
   1회 실행 차이는 노이즈일 수 있으니 작은 차이에 의미를 두지 말 것.
-- `score_official.py`는 문자열 매칭 기반 **근사치**다. 팩 정책상 최종 판정은
+- `eval/score_official.py`는 문자열 매칭 기반 **근사치**다. 팩 정책상 최종 판정은
   사람이 하며, "표현이 다르다"는 오답 사유가 아니다.
   **팀 간 순위는 평가담당자가 동일 기준으로 매기는 것이 원칙이다.**
 

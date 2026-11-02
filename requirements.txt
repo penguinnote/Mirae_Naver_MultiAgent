@@ -6,7 +6,7 @@
 # poppler, tesseract 같은 시스템 패키지는 필요 없습니다.
 # PDF 렌더링은 pypdfium2가 자체 처리하고, OCR은 CLOVA API를 씁니다.
 
-# --- 1단계: 문서 추출 (build_dataset.py) ---
+# --- 1단계: 문서 추출 (pipeline/build_dataset.py) ---
 pdfplumber>=0.11,<0.12
 pypdfium2>=4.30,<6
 python-docx>=1.1,<2

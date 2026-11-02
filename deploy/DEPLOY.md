@@ -18,10 +18,10 @@ uvicorn server:app --host 127.0.0.1 --port 8000
 
 ```bash
 curl "http://127.0.0.1:8000/answer?question_id=t1&question=DC%EC%99%80%20DB%EC%9D%98%20%EC%B0%A8%EC%9D%B4%EA%B0%80%20%EB%AD%90%EC%95%BC"
-python eval_answers.py --endpoint http://127.0.0.1:8000/answer --evalset evalset_v1.json --show
+python eval/eval_answers.py --endpoint http://127.0.0.1:8000/answer --evalset eval/sets/evalset_v1.json --show
 ```
 
-`eval_answers.py --endpoint`가 규격(5개 필드 전부 문자열인지 등)까지 같이 점검해줍니다.
+`eval/eval_answers.py --endpoint`가 규격(5개 필드 전부 문자열인지 등)까지 같이 점검해줍니다.
 로컬에서 40문항 정답률이 `agent:answer_for_eval` 어댑터로 돌린 결과와 같게 나오는지도
 같이 확인하세요 — 다르면 서버 쪽 래핑에 버그가 있다는 뜻입니다.
 
@@ -71,7 +71,7 @@ pip install -r requirements.txt
 
 | 키 | 이유 |
 |---|---|
-| `CLOVA_OCR_URL` · `CLOVA_OCR_SECRET` | `build_dataset.py` 전용. 인덱스 구축 1회성 |
+| `CLOVA_OCR_URL` · `CLOVA_OCR_SECRET` | `pipeline/build_dataset.py` 전용. 인덱스 구축 1회성 |
 | `CLOVA_RERANK_REQUEST_ID` | `search.py --rerank` CLI 전용. **`agent.py`에 리랭커 호출이 0건**이라 파이프라인에서 안 씁니다 |
 
 `X-NCP-CLOVASTUDIO-REQUEST-ID`는 임베딩과 HCX가 **각각 다른 값**입니다.
@@ -130,7 +130,7 @@ cd /opt/pension-agent && tar xzf runtime_data.tgz && rm runtime_data.tgz
 
 ```bash
 cd /opt/pension-agent && source venv/bin/activate
-python verify_deploy_fix.py      # 경로·캐시·호출간격을 HCX 없이 점검
+python tools/verify_deploy_fix.py      # 경로·캐시·호출간격을 HCX 없이 점검
 ```
 
 ## 3. 서비스 등록 (systemd)
@@ -165,7 +165,7 @@ nginx가 먼저 연결을 끊어버립니다.
 
 ```bash
 curl "http://{공인 IP}/answer?question_id=t1&question=DC%EC%99%80%20DB%EC%9D%98%20%EC%B0%A8%EC%9D%B4%EA%B0%80%20%EB%AD%90%EC%95%BC"
-python eval_answers.py --endpoint http://{공인 IP}/answer --evalset evalset_v1.json --show
+python eval/eval_answers.py --endpoint http://{공인 IP}/answer --evalset eval/sets/evalset_v1.json --show
 ```
 
 **포트가 80인지, 8000이 아닌지** 다시 한번 확인하세요 — 8000번은 제출 불가 규격입니다.
