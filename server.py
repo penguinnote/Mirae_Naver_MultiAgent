@@ -13,8 +13,8 @@ think_trace, answer. 헤더(인증 포함) 요구 없음.
 
 로컬 검증:
     curl "http://127.0.0.1:8000/answer?question_id=t1&question=DC%EC%99%80%20DB%EC%9D%98%20%EC%B0%A8%EC%9D%B4%EA%B0%80%20%EB%AD%90%EC%95%BC"
-    python eval_answers.py --adapter agent:answer_for_eval --evalset evalset_v1.json --show   (에이전트 자체 회귀 확인용)
-    python eval_answers.py --endpoint http://127.0.0.1:8000/answer --evalset evalset_v1.json --show   (서버 경유 회귀 + 규격 확인용)
+    python eval/eval_answers.py --adapter agent:answer_for_eval --evalset eval/sets/evalset_v1.json --show   (에이전트 자체 회귀 확인용)
+    python eval/eval_answers.py --endpoint http://127.0.0.1:8000/answer --evalset eval/sets/evalset_v1.json --show   (서버 경유 회귀 + 규격 확인용)
 
 실제 배포에서는 uvicorn을 80/443에 직접 물리지 않는다 — 루트 권한 없이 80을 열 수
 없고, nginx가 앞단에서 재시작 중 다운타임을 흡수해준다. nginx가 80/443 → 이

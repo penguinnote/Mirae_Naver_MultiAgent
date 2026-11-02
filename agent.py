@@ -29,7 +29,7 @@
     python agent.py --selftest
 
     # 평가셋으로 전체 채점 (공용 채점기 사용)
-    python eval_answers.py --adapter agent:answer_for_eval --name "윤종 v0"
+    python eval/eval_answers.py --adapter agent:answer_for_eval --name "윤종 v0"
 
 환경변수 (.env)
 --------------

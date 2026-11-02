@@ -4,7 +4,7 @@
 
 평가용 엔드포인트: `http://211.188.59.247/answer`
 운영 기간: 2026-09-07 ~ 09-30
-심사 대상 코드 커밋: `af91008` (배포 서버가 이 해시로 동작합니다. 이후 커밋은 문서 수정과 폴더 정리이며, 런타임 파일 `agent.py`·`server.py`·`search.py`·`embed_and_index.py`는 이 해시와 같습니다)
+심사 대상 코드 커밋: `af91008` (배포 서버가 이 해시로 동작합니다. 이후 커밋은 문서 수정과 폴더 정리이며, 런타임 파일 `agent.py`·`server.py`·`search.py`·`embed_and_index.py`는 상단 사용법 주석의 경로 외에는 이 해시와 같습니다)
 
 ## 폴더 구조
 
@@ -300,7 +300,6 @@ zsh에서는 `#`가 주석으로 처리되지 않아 명령 인자로 넘어갑�
 | `tools/token_report.py` | 실행 한 번의 입력·출력 토큰 집계 |
 | `tools/report_share.py` · `tools/audit_norm.py` | 팀 공유용 채점 리포트, 채점기 정규화 오탐 검사 |
 | `tools/check_source_line.py` · `tools/verify_deploy_fix.py` | 출처 줄 생성 점검, 배포 전 수정사항을 HCX 없이 점검 |
-| `tools/extract_test.py` | 초기 OCR 추출 실험 (산출물 `tools/extracted_dataset.csv`). 현재 파이프라인은 `pipeline/build_dataset.py` |
 
 ### 문서
 
