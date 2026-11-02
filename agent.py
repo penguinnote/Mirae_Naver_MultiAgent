@@ -4529,7 +4529,7 @@ def run(question: str, question_id: str = "", use_cache: bool = True) -> dict:
 
 
 def answer_for_eval(question: str) -> dict:
-    """eval_answers.py --adapter agent:answer_for_eval 로 쓰는 진입점."""
+    """eval/eval_answers.py --adapter agent:answer_for_eval 로 쓰는 진입점."""
     return run(question)
 
 
