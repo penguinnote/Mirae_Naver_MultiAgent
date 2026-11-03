@@ -40,6 +40,19 @@ from pathlib import Path
 RRF_K = 60          # Reciprocal Rank Fusion 상수. 통상 60을 쓴다.
 POOL = 60           # 각 검색기에서 가져올 후보 수
 
+
+def rrf_fuse(ranks: dict[str, dict[str, int]]) -> list[tuple[str, dict[str, int]]]:
+    """검색기별 순위를 Reciprocal Rank Fusion으로 합쳐 내림차순으로 돌려준다.
+
+    ranks = {chunk_id: {"vec": 3, "bm25": 1}, ...}  (순위는 1부터)
+    점수 = Σ 1 / (RRF_K + 순위). 점수 스케일이 다른 검색기도 순위만 보므로
+    안전하게 합쳐진다. 동점이면 입력 순서를 유지한다(sorted는 안정 정렬).
+    이 CLI와 agent.Retriever(_fuse, 펀드별 분할 검색)가 같은 함수를 쓴다.
+    """
+    return sorted(ranks.items(),
+                  key=lambda kv: -sum(1.0 / (RRF_K + r) for r in kv[1].values()))
+
+
 RERANK_URL = "https://clovastudio.stream.ntruss.com/v1/api-tools/reranker"
 RERANK_IN = 15      # 리랭커에 넘길 후보 수 (RRF 상위 N개)
 RERANK_DOC_CHARS = 1200   # 문서당 잘라 보낼 길이
@@ -269,9 +282,7 @@ def main() -> None:
             ranks.setdefault(cid, {})["bm25"] = rank + 1
 
     # ── RRF 융합: 두 순위의 역수를 더한다. 점수 스케일이 달라도 안전하다.
-    fused_all = sorted(
-        ranks.items(),
-        key=lambda kv: -sum(1.0 / (RRF_K + r) for r in kv[1].values()))
+    fused_all = rrf_fuse(ranks)
 
     # ── 리랭킹 (선택)
     if a.rerank or a.rerank_raw:

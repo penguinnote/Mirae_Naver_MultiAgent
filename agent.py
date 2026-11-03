@@ -72,7 +72,7 @@ except ImportError:
     pass
 
 from search import (  # noqa: E402
-    RRF_K, POOL, build_bm25, embed_query, tokenize, matches,
+    POOL, build_bm25, embed_query, tokenize, matches, rrf_fuse,
 )
 
 CHAT_URL_DEFAULT = "https://clovastudio.stream.ntruss.com/v3/chat-completions/HCX-007"
@@ -1254,7 +1254,7 @@ class Retriever:
 
         전체 풀(POOL=60)로 한 번에 검색하면 계열 펀드들의 청크가 서로 거의
         동일해서(법정 문구 공유) 상위 슬롯을 한두 펀드가 다 차지하고 나머지는
-        通 밀려난다. 펀드별로 따로 뽑아야 전부 근거에 들어간다.
+        모두 밀려난다. 펀드별로 따로 뽑아야 전부 근거에 들어간다.
         """
         idxs = self.chunks_by_fund.get(fund_code, [])
         if not idxs:
@@ -1276,8 +1276,7 @@ class Retriever:
             cid = self.meta[i]["chunk_id"]
             picked.setdefault(cid, {})["bm25"] = rank + 1
 
-        fused = sorted(picked.items(),
-                       key=lambda kv: -sum(1.0 / (RRF_K + x) for x in kv[1].values()))
+        fused = rrf_fuse(picked)
         out = []
         for cid, src in fused[:k]:
             m = self.md_of[cid]
@@ -1324,8 +1323,7 @@ class Retriever:
             if matches(md, fund, doc_type, None):
                 ranks.setdefault(m["chunk_id"], {})["bm25"] = rank + 1
 
-        return sorted(ranks.items(),
-                      key=lambda kv: -sum(1.0 / (RRF_K + x) for x in kv[1].values()))
+        return rrf_fuse(ranks)
 
     def __call__(self, state: dict) -> dict:
         q = state["question"]

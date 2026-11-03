@@ -78,7 +78,7 @@ sys.path.insert(0, str(ROOT))
 # search.py에서 검증된 로직을 그대로 재사용한다.
 # 평가용으로 검색 로직을 따로 구현하면 "평가는 통과하는데 실제로는 다른 코드"가 된다.
 from search import (  # noqa: E402
-    RRF_K, POOL, build_bm25, embed_query, tokenize, matches,
+    POOL, build_bm25, embed_query, tokenize, matches, rrf_fuse,
 )
 
 
@@ -113,8 +113,7 @@ def hybrid_search(query, col, bm25, meta, k, mode="hybrid",
                 continue
             ranks.setdefault(m["chunk_id"], {})["bm25"] = rank + 1
 
-    fused = sorted(ranks.items(),
-                   key=lambda kv: -sum(1.0 / (RRF_K + r) for r in kv[1].values()))
+    fused = rrf_fuse(ranks)
     return [cid for cid, _ in fused[:k]]
 
 
@@ -164,8 +163,7 @@ def run_compare(questions, col, bm25, meta, text_of, a):
         if mode != "vector":
             for cid, r in bm_rank.items():
                 ranks.setdefault(cid, {})["bm25"] = r
-        fused = sorted(ranks.items(),
-                       key=lambda kv: -sum(1.0 / (RRF_K + r) for r in kv[1].values()))
+        fused = rrf_fuse(ranks)
         return [cid for cid, _ in fused[:k]]
 
     grid = {}
