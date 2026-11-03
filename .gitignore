@@ -45,6 +45,7 @@ venv/
 __pycache__/
 *.py[cod]
 .ipynb_checkpoints/
+.pytest_cache/
 
 # ── OS / 임시 ────────────────────────────────────────────
 .DS_Store

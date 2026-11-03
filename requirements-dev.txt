@@ -1,0 +1,3 @@
+# 테스트 실행용 (pytest tests/). agent.py는 표준 라이브러리만으로 임포트되고
+# 테스트는 HCX·Chroma·실제 수수료 DB를 쓰지 않으므로 pytest 하나면 된다.
+pytest>=8,<9

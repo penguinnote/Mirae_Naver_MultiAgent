@@ -20,6 +20,7 @@
 ├── tools/                 진단 · 점검 스크립트
 ├── docs/                  API 명세 · 데이터 스키마
 ├── deploy/                NCP 배포 (nginx · systemd · 가이드)
+├── tests/                 pytest 단위 테스트 (API 키·인덱스 없이 실행)
 ├── dataset/               인덱스 산출물 (대부분 로컬에서 생성, 저장소 밖)
 ├── 0.투자설명서 복사본/    원본 투자설명서
 ├── 0.docs_renamed 복사본/  원본 연금 제도 문서
@@ -256,6 +257,15 @@ curl localhost:8000/health
 ```
 
 빌드에는 위에서 만든 `dataset/` 산출물 네 개가 있어야 합니다. `.env`는 이미지에 담지 않고 `--env-file`로 주입합니다.
+
+### 테스트
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+`tests/`는 SQL 교정 함수, `fee_sql` 교정 9종, 연금수령한도·세액공제 계산을 검사합니다. HCX를 부르지 않고 소형 SQLite 픽스처를 쓰므로 API 키, Chroma 인덱스, `dataset/` 산출물 없이 돌아갑니다. GitHub Actions(`.github/workflows/test.yml`)가 push와 PR마다 같은 명령을 실행합니다.
 
 zsh에서는 `#`가 주석으로 처리되지 않아 명령 인자로 넘어갑니다. 이 문서의 명령은 전부 주석 없이 적었습니다.
 
