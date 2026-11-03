@@ -1764,17 +1764,23 @@ def _strip_fund_literals(sql: str) -> str | None:
 # 조건은 이름을 뽑아 compose까지 전달한다.
 _AGG_RE = re.compile(r"\b(?:MIN|MAX|AVG|SUM|COUNT|GROUP_CONCAT)\s*\(", re.I)
 _WHERE_KW_RE = re.compile(r"\bWHERE\b", re.I)
+# 작은따옴표 리터럴('' 이스케이프 포함). 괄호 깊이를 셀 때 이 안은 건너뛴다.
+# 펀드명 리터럴에는 LIKE '%1호(채%'처럼 짝 없는 괄호가 들어갈 수 있고,
+# 이걸 구조로 세면 깊이가 1에 묶여 최상위 OR·ORDER BY를 놓친다.
+_SQL_STR = r"'(?:[^']|'')*'"
 _TAIL_KW_RE = re.compile(
-    r"\(|\)|\bORDER\s+BY\b|\bGROUP\s+BY\b|\bLIMIT\b|\bHAVING\b", re.I)
+    _SQL_STR + r"|\(|\)|\bORDER\s+BY\b|\bGROUP\s+BY\b|\bLIMIT\b|\bHAVING\b", re.I)
 _BOOL_KW_RE = re.compile(r"\(|\)|\bOR\b", re.I)
 
 
 def _split_top_level(text: str, kw: str) -> list:
     """괄호 밖에 있는 kw(OR/AND)를 기준으로 조건 문자열을 나눈다."""
-    rx = re.compile(r"\(|\)|\b" + kw + r"\b", re.I)
+    rx = re.compile(_SQL_STR + r"|\(|\)|\b" + kw + r"\b", re.I)
     parts, depth, last = [], 0, 0
     for mm in rx.finditer(text):
         t = mm.group(0)
+        if t.startswith("'"):
+            continue
         if t == "(":
             depth += 1
         elif t == ")":
@@ -1801,6 +1807,8 @@ def _split_where_suffix(sql: str):
     depth, cut = 0, len(body)
     for mm in _TAIL_KW_RE.finditer(body):
         t = mm.group(0)
+        if t.startswith("'"):
+            continue
         if t == "(":
             depth += 1
         elif t == ")":
