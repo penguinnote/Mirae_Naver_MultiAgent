@@ -22,8 +22,8 @@
 ├── deploy/                NCP 배포 (nginx · systemd · 가이드)
 ├── tests/                 pytest 단위 테스트 (API 키·인덱스 없이 실행)
 ├── dataset/               인덱스 산출물 (대부분 로컬에서 생성, 저장소 밖)
-├── 0.투자설명서 복사본/    원본 투자설명서
-├── 0.docs_renamed 복사본/  원본 연금 제도 문서
+├── 0.투자설명서 복사본/    원본 투자설명서 (주최측 배포 자료, 저장소 밖 — 로컬에 둔다)
+├── 0.docs_renamed 복사본/  원본 연금 제도 문서 (〃)
 ├── Dockerfile · requirements.txt · requirements-lock.txt
 └── 기술제안서.md
 ```
@@ -223,7 +223,7 @@ cp .env.example .env
 
 ### 데이터셋 만들기
 
-`dataset/` 산출물은 용량 때문에 저장소에 없지만 **원본 문서는 함께 올라가 있습니다**(`0.투자설명서 복사본` 100파일, `0.docs_renamed 복사본` 58파일). 저장소만 클론해도 아래 순서로 다시 만들 수 있습니다.
+`dataset/` 산출물과 원본 문서는 저장소에 없습니다. 원문은 주최측 배포 자료라 재배포하지 않습니다. 배포받은 원문을 저장소 루트에 `0.투자설명서 복사본/`(투자설명서 100파일)과 `0.docs_renamed 복사본/`(연금 제도 문서 58파일)로 두고 아래 순서로 실행하세요. 두 폴더는 `.gitignore`가 막고 있습니다.
 
 ```bash
 python pipeline/build_dataset.py --input . --out ./dataset --workers 4
