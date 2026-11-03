@@ -20,17 +20,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-GOLD_CANDIDATES = [
-    ROOT / "gold_private_v4.json",
-    Path.home() / "Downloads/mirae_blind_eval_v4_EVALUATOR_PRIVATE/gold_private_v4.json",
-]
+GOLD_CANDIDATES = [ROOT / "gold_private_v4.json"]
 
 
 def find_gold():
+    if os.environ.get("GOLD_PATH"):
+        return Path(os.environ["GOLD_PATH"]).expanduser()
     for p in GOLD_CANDIDATES:
         if p.exists():
             return p
-    sys.exit("gold_private_v4.json을 찾지 못했습니다. --gold로 경로를 주세요.")
+    sys.exit("gold_private_v4.json을 찾지 못했습니다. --gold 또는 GOLD_PATH로 경로를 주세요.")
 
 
 def main():

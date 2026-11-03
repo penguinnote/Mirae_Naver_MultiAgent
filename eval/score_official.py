@@ -26,6 +26,7 @@ FAIRNESS_AND_SCORING.md(팀 자체 제작, 대회 주최측 공지 아님)에 �
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import re
 from pathlib import Path
@@ -35,18 +36,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 GOLD_NAME = "gold_private_integrated_v1.json"
 
-# 정답지를 흔히 두는 위치들을 훑는다. --gold 로 직접 지정할 수도 있다.
+# 정답지는 공개 저장소에 없다(팀 blind 평가용). 우선순위는
+#   --gold 인자 → 환경변수 GOLD_PATH → 저장소 루트의 기본 위치.
 _GOLD_CANDIDATES = [
     ROOT / GOLD_NAME,
     ROOT / "mirae_integrated_blind_v1_ANSWERS_ONLY" / GOLD_NAME,
-    Path.home() / "Downloads" / "mirae_integrated_blind_v1_ANSWERS_ONLY" / GOLD_NAME,
-    Path.home() / "Downloads" / GOLD_NAME,
-    Path.home() / "Desktop" / "mirae_integrated_blind_v1_ANSWERS_ONLY" / GOLD_NAME,
-    Path("/mnt/user-data/uploads/mirae_integrated_blind_v1_ANSWERS_ONLY") / GOLD_NAME,
 ]
 
 
 def find_gold(explicit: str | None = None) -> Path:
+    explicit = explicit or os.environ.get("GOLD_PATH")
     if explicit:
         p = Path(explicit).expanduser()
         if not p.exists():
@@ -55,14 +54,9 @@ def find_gold(explicit: str | None = None) -> Path:
     for p in _GOLD_CANDIDATES:
         if p.exists():
             return p
-    # 마지막 수단: 홈 아래를 한 번 훑는다
-    for root in (Path.home() / "Downloads", Path.home() / "Desktop", Path.cwd()):
-        if root.exists():
-            for p in root.rglob(GOLD_NAME):
-                return p
     raise SystemExit(
         f"{GOLD_NAME} 을 찾지 못했습니다.\n"
-        f"  --gold /경로/{GOLD_NAME} 로 직접 지정해 주세요.")
+        f"  --gold /경로/{GOLD_NAME} 또는 GOLD_PATH 환경변수로 지정해 주세요.")
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -358,7 +352,7 @@ def main():
     ap.add_argument("--out", help="문항별 상세를 JSON으로 저장")
     ap.add_argument("--show", type=int, default=15,
                     help="사람 검토가 필요한 문항을 몇 개 보여줄지")
-    ap.add_argument("--gold", help=f"{GOLD_NAME} 경로 (미지정 시 자동 탐색)")
+    ap.add_argument("--gold", help=f"{GOLD_NAME} 경로 (미지정 시 GOLD_PATH → 저장소 루트)")
     a = ap.parse_args()
 
     gold_path = find_gold(a.gold)

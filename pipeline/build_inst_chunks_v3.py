@@ -3,8 +3,9 @@
 우리 스키마(chunks_final.jsonl 형식)로 변환한다.
 
 입력
-  ~/Downloads/db/rag_chunks_v3.json      — 신규 760청크
-  ~/Downloads/db/rag_embeddings_v3.json  — 같은 760개 + embedding(1024차원)
+  $INST_V3_DIR/rag_chunks_v3.json      — 신규 760청크
+  $INST_V3_DIR/rag_embeddings_v3.json  — 같은 760개 + embedding(1024차원)
+  (INST_V3_DIR 미지정 시 저장소 루트의 inst_v3/. 팀원 배포본이라 저장소에 없다)
   dataset/chunks_final.jsonl             — 현재 라이브 청크 14,813줄 (읽기만)
 
 출력
@@ -25,10 +26,10 @@ from pathlib import Path
 # 저장소 루트. 이 파일은 pipeline/ 아래에 있으므로 한 단계 위다.
 BASE_DIR = Path(__file__).resolve().parents[1]
 DATASET   = BASE_DIR / "dataset"
-DOWNLOADS = Path.home() / "Downloads" / "db"
+SRC_DIR   = Path(os.environ.get("INST_V3_DIR") or BASE_DIR / "inst_v3").expanduser()
 
-SRC_CHUNKS = DOWNLOADS / "rag_chunks_v3.json"
-SRC_EMBEDS = DOWNLOADS / "rag_embeddings_v3.json"
+SRC_CHUNKS = SRC_DIR / "rag_chunks_v3.json"
+SRC_EMBEDS = SRC_DIR / "rag_embeddings_v3.json"
 LIVE_JSONL = DATASET / "chunks_final.jsonl"
 
 OUT_JSONL   = DATASET / "chunks_final.NEW.jsonl"

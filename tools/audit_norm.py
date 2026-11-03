@@ -10,9 +10,13 @@ ns()는 공백을 전부 지우고 부분문자열로 맞춘다. 한국어 띄�
      정답 표현이 "…가 아닙니다" 안에 들어 있어도 맞은 것으로 센다.
 
 원문 위치를 되짚어 두 경우를 찾아낸다.
+
+    python tools/audit_norm.py --gold 정답지.json --raw raw_run1.json
 """
+import argparse
 import importlib.util
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -25,12 +29,17 @@ m = importlib.util.module_from_spec(spec)
 sys.modules["so"] = m
 spec.loader.exec_module(m)
 
-GOLD = json.load(open(
-    "/mnt/user-data/uploads/mirae_integrated_blind_v1_ANSWERS_ONLY/"
-    "gold_private_integrated_v1.json", encoding="utf-8"))
-RAW = json.load(open(
-    "/mnt/user-data/uploads/dev--data_test/raw_penguinnote_integrated_v2.json",
-    encoding="utf-8"))
+ap = argparse.ArgumentParser(description="채점기 정규화 오탐 검사")
+ap.add_argument("--gold", default=os.environ.get("GOLD_PATH"),
+                help="정답지 JSON (기본: 환경변수 GOLD_PATH)")
+ap.add_argument("--raw", default=os.environ.get("RAW_PATH"),
+                help="실행 결과 JSON (기본: 환경변수 RAW_PATH)")
+args = ap.parse_args()
+if not args.gold or not args.raw:
+    ap.error("--gold와 --raw(또는 GOLD_PATH·RAW_PATH)를 지정해 주세요.")
+
+GOLD = json.load(open(Path(args.gold).expanduser(), encoding="utf-8"))
+RAW = json.load(open(Path(args.raw).expanduser(), encoding="utf-8"))
 raw_by = {r["question_id"]: r for r in RAW["results"]}
 
 # 문장 끝으로 볼 문자들
