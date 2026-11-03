@@ -2962,7 +2962,24 @@ def format_sql_results(state: dict) -> str:
 # 적용해 8배 틀린 값을 낸다(evalset Q-030에서 두 라운드 연속 재현됨).
 # 프롬프트로 못 고치는 산수 오류라 파이썬으로 직접 계산해 "이 값을
 # 그대로 쓰라"고 근거에 넣어준다.
+#
+# 아래 세 상수는 검색 근거에서 읽지 않고 코드에 고정한 값이다. 공식의
+# 구조(분모·배수)는 문장에서 안정적으로 뽑기 어렵고, 세 문서가 같은 값을
+# 적고 있어 고정했다. 법령이 바뀌면 여기를 고친다. 쪽수는 1부터 센다.
+# (반면 세액공제 한도·세율과 연금소득세율 구간은 tax_credit·tax_bracket·
+#  isa_credit이 근거 문장에서 읽는다.)
 # ══════════════════════════════════════════════════════════════════════
+
+# 연금수령요건 만 55세 이상. doc2.pdf 1쪽(doc2_p1_0000),
+# doc39.docx(doc39_p0_0003, "만55세 이후에 인출").
+PENSION_START_AGE = 55
+# 이 연차부터 한도가 없다. doc39.docx(doc39_p0_0003, "11년차부터는 한도 자체가 사라져").
+PENSION_LIMIT_FREE_YEAR = 11
+# 평가액 / (11 - 연금수령연차) × 120%. doc2.pdf 1쪽(doc2_p1_0002),
+# doc21.pdf 1쪽(doc21_p1_0002), doc39.docx(doc39_p0_0000).
+PENSION_LIMIT_MULTIPLIER = 1.2
+_PENSION_LIMIT_PCT = round(PENSION_LIMIT_MULTIPLIER * 100)
+
 
 def _parse_won(text: str) -> "int | None":
     """'1억', '1억 2,000만원', '100,000,000원' 같은 한글 금액 표현을 원 단위로.
@@ -2996,9 +3013,10 @@ def _extract_year_car(text: str) -> "tuple[int | None, str]":
     m = re.search(r"(?:만\s*)?(\d{2})\s*세", text)
     if m:
         age = int(m.group(1))
-        if age < 55:
-            return 0, f"만 {age}세는 연금수령 개시 연령(55세) 미만"
-        return age - 54, f"만 {age}세를 올해 최초 연금개시로 가정 → {age-54}년차"
+        if age < PENSION_START_AGE:
+            return 0, f"만 {age}세는 연금수령 개시 연령({PENSION_START_AGE}세) 미만"
+        year = age - PENSION_START_AGE + 1
+        return year, f"만 {age}세를 올해 최초 연금개시로 가정 → {year}년차"
     return None, "연차·나이 정보를 찾지 못함"
 
 
@@ -3026,18 +3044,19 @@ def calc(state: dict) -> dict:
         state["trace"].append("calc: 평가액 또는 연차/나이를 추출하지 못해 건너뜀")
         return state
 
+    free, pct = PENSION_LIMIT_FREE_YEAR, _PENSION_LIMIT_PCT
     if year_car < 1:
-        text = (f"[계산 결과] {basis}이므로 아직 연금수령 요건(만 55세 이상)을 "
+        text = (f"[계산 결과] {basis}이므로 아직 연금수령 요건(만 {PENSION_START_AGE}세 이상)을 "
                 f"충족하지 못한 것으로 보입니다. 연금수령한도 계산 대상이 아닙니다.")
-    elif year_car >= 11:
-        text = (f"[계산 결과] 연금수령연차 {year_car}년차({basis})는 11년차 이상이므로 "
+    elif year_car >= free:
+        text = (f"[계산 결과] 연금수령연차 {year_car}년차({basis})는 {free}년차 이상이므로 "
                 f"연금수령한도가 없습니다. 평가액 전액을 인출해도 연금수령으로 "
                 f"인정됩니다.")
     else:
-        limit = amount / (11 - year_car) * 1.2
+        limit = amount / (free - year_car) * PENSION_LIMIT_MULTIPLIER
         text = (
-            f"[계산 결과] 연금수령한도 = 연금계좌 평가액 / (11 - 연금수령연차) × 120%\n"
-            f"  평가액 {_format_won(amount)} / (11 - {year_car}) × 120% "
+            f"[계산 결과] 연금수령한도 = 연금계좌 평가액 / ({free} - 연금수령연차) × {pct}%\n"
+            f"  평가액 {_format_won(amount)} / ({free} - {year_car}) × {pct}% "
             f"= {_format_won(limit)}\n"
             f"  ※ 연차 산정 근거: {basis}\n"
             f"  ※ 이 값은 코드로 직접 계산했습니다. 답변에서 이 숫자를 그대로 쓰고 "
@@ -3383,6 +3402,10 @@ def risk_grade(state: dict) -> dict:
 #      평가는 단발 GET이라 되물으면 그 문항은 0점이다.
 # ══════════════════════════════════════════════════════════════════════
 
+# 프롬프트 본문에도 제도 수치가 문장으로 고정돼 있다(연금저축 단독 600만원,
+# 합산 900만원, 세액공제율 16.5%/13.2%, 총급여 5,500만원·종합소득 4,500만원 기준).
+# 근거: doc41.docx 세액공제 표(doc41_p0_0000). tax_credit은 같은 값을 근거
+# 문장에서 다시 읽어 계산하므로, 개정 시 이 프롬프트와 문서를 함께 고쳐야 한다.
 SYSTEM_PROMPT = """당신은 미래에셋증권의 연금 상담 전문가입니다.
 제공된 근거 자료만 사용해 정확하게 답변합니다.
 
