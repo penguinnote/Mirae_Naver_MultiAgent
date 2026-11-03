@@ -25,7 +25,9 @@ WorkingDirectory=/opt/pension-agent
 ExecStart=/opt/pension-agent/venv/bin/uvicorn server:app --host 127.0.0.1 --port 8000 --workers 1
 Restart=always
 RestartSec=3
-# 평가 데드라인(240초)+마진보다 넉넉하게 종료 유예를 준다.
+# 종료 신호 후 30초 안에 끝나지 않으면 강제 종료한다. 처리 중인 요청
+# (agent.DEADLINE 240초까지 걸릴 수 있다)을 끝까지 기다리지는 않으므로
+# 재시작 순간에 돌던 요청은 끊긴다.
 TimeoutStopSec=30
 
 [Install]

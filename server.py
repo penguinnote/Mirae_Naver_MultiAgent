@@ -1,5 +1,5 @@
 """
-FastAPI 서버 — 대회 평가 API 규격(CLAUDE.md 6장) 준수.
+FastAPI 서버 — 대회 평가 API 규격(docs/API.md) 준수.
 
     GET {endpoint}/answer?question_id={id}&question={질의}
 

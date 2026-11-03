@@ -1,26 +1,29 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-연금 Agent v0 — 검색 + 답변 생성
-
-지금까지는 검색까지만 있었다. 이 파일이 그 위에 **답변 생성**을 얹는다.
-평가셋 기준선(하이브리드 k=5, 근거 충족률 88.9%)이 이 에이전트의 천장이다.
-여기서 나오는 정답률이 88.9%보다 낮으면 검색이 아니라 프롬프트 문제다.
+연금 Agent — 질문마다 노드를 골라 조립하는 RAG 에이전트
 
 구조
 ----
-    route  →  retrieve  →  [fee_sql]  →  [calc]  →  compose  →  to_response
-   (판단)     (하이브리드)   (Text2SQL)   (순수계산)   (HCX-007)    (평가 API 형식)
+    safety_check → route → retrieve → [fee_sql] → [calc] → tax_bracket
+        → isa_credit → tax_credit → risk_grade → compose → to_response
 
-    fee_sql은 route가 need_sql을 설정할 때만, calc는 need_calc를 설정할 때만
-    실행된다. 둘 다 조건에 안 걸리면 건너뛴다.
-    calc는 LLM을 쓰지 않는다 — 연금수령한도 계산에서 HCX-007이 8배 틀린 값을
-    낸 적이 있어서(×120%를 ×(11-연차)로 잘못 적용), 순수 파이썬으로 계산해
-    "이 값을 그대로 쓰라"고 넘긴다.
+    safety_check  PII·인젝션을 정규식으로 잡아 HCX 호출 전에 거절한다.
+    route         규칙 기반. doc_type·need_sql·need_calc를 정한다.
+    retrieve      Retriever. 벡터(Chroma) + BM25를 RRF로 합치고 제도·상품 자리를 나눈다.
+    fee_sql       need_sql일 때만. HCX가 만든 SQL을 코드가 교정해 조회한다.
+    calc          need_calc일 때만. 연금수령한도를 파이썬으로 계산한다.
+    tax_bracket · isa_credit · tax_credit · risk_grade
+                  자체 게이트로 조건이 맞을 때만 근거에 확정값을 덧붙인다.
+    compose       HCX-007로 답변을 생성한다.
+    to_response   대회 규격 5필드 JSON으로 포장한다.
 
-노드를 함수로 나눴다. v1에서 LangGraph로 옮길 때 그대로 노드가 되도록
-입출력을 state 딕셔너리 하나로 통일해 뒀다. 지금 LangGraph를 쓰지 않는 이유는
-노드가 3개뿐이라 얻는 것보다 디버깅 비용이 크기 때문이다.
+    LLM(HCX-007)을 쓰는 곳은 fee_sql과 compose 두 곳뿐이다. 계산을 LLM에
+    맡기지 않는 이유: 연금수령한도에서 HCX-007이 8배 틀린 값을 낸 적이
+    있다(×120%를 ×(11-연차)로 잘못 적용).
+
+노드는 state 딕셔너리 하나를 받아 돌려주는 함수로 통일해 두었다. LangGraph는
+쓰지 않는다. run()이 질문마다 노드 목록을 조립하는 것으로 충분했다.
 
 사용법
 ------
@@ -29,7 +32,7 @@
     python agent.py --selftest
 
     # 평가셋으로 전체 채점 (공용 채점기 사용)
-    python eval/eval_answers.py --adapter agent:answer_for_eval --name "윤종 v0"
+    python eval/eval_answers.py --adapter agent:answer_for_eval --evalset eval/sets/evalset_v1.json
 
 환경변수 (.env)
 --------------
@@ -77,18 +80,15 @@ from search import (  # noqa: E402
 
 CHAT_URL_DEFAULT = "https://clovastudio.stream.ntruss.com/v3/chat-completions/HCX-007"
 
-# 2026-08-25: 5 → 8.
+# 검색 결과 상위 K. 5 → 8(2026-08-25) → 12(e3427b9)로 올렸다.
 #
-# 예전 평가셋에서는 k=5가 최적이었지만(k=20으로 늘려도 +2.8%p), 56문항 blind에서
-# 놓친 항목을 원인별로 나눠보니 **46%가 "문서는 갖고 있는데 상위 5개에 못 올린 것"**
-# 이었다. 데이터도 모델도 아닌 순위 문제다.
+# 8로 올린 이유: 56문항 blind에서 놓친 항목의 46%가 "문서는 갖고 있는데
+# 상위 5개에 못 올린 것"이었다. 문서 3개를 추가해 BM25 통계가 조금 바뀐
+# 것만으로 정답 청크가 1위에서 5위 밖으로 밀린 사례도 있었다.
 #
-# 결정적인 사례: 문서 3개(45청크)를 추가한 것만으로 BM25 통계가 미세하게 바뀌어,
-# 정답이 든 청크가 1위에서 5위 밖으로 밀려 IB1-95267889가 100% → 0%가 됐다.
-# 5칸짜리 창이 너무 좁아 조금만 흔들려도 정답이 빠진다.
-#
-# 컨텍스트 여유는 충분하다 — 실측 평균 4,194자로 MAX_CONTEXT_CHARS(9,000)의
-# 절반이고 상한에 걸린 문항이 0개였다. k=8이면 평균 6,700자로 여전히 여유가 있다.
+# 12로 올린 이유: 홀드아웃 4회 종합 81.0→83.8, evalset_v1 80~85→90~95%,
+# 새 실패 0건. 16 이상은 MAX_CONTEXT_CHARS(9,000자) 상한에 막혀 효과가 없다.
+# (8로 올릴 때의 전제였던 '상한에 걸린 문항 0개'는 12에서 2개로 바뀌었다.)
 TOP_K = 12
 EVIDENCE_CHARS = 1500  # 청크 하나당 프롬프트에 넣을 최대 길이
 DEADLINE = 240       # 주최측 타임아웃 300초 중 60초를 안전 마진으로 남긴다
@@ -4590,7 +4590,7 @@ def selftest() -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="연금 Agent v0")
+    ap = argparse.ArgumentParser(description="연금 Agent")
     ap.add_argument("question", nargs="?", help="질문")
     ap.add_argument("--qid", default="", help="question_id")
     ap.add_argument("--selftest", action="store_true", help="HCX 연결만 확인")
