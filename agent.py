@@ -398,6 +398,18 @@ _DATA_DIR = Path(__file__).resolve().parent / "dataset"
 FUND_FEES_DB = str(_DATA_DIR / "fund_fees.sqlite")
 
 
+def _connect_fees():
+    """fund_fees.sqlite를 읽기 전용으로 연다.
+
+    런타임은 조회만 한다. 쓰기 가능한 연결이면 파일이 없을 때 빈 DB가
+    새로 생기고, _validate_sql을 빠져나간 문장이 DB를 바꿀 여지도 남는다.
+    DB를 만드는 쪽은 pipeline/build_fund_fees.py다.
+    """
+    import sqlite3
+    return sqlite3.connect(Path(FUND_FEES_DB).resolve().as_uri() + "?mode=ro",
+                           uri=True)
+
+
 # 클래스 코드 표기를 잡는다: C-P, A-E, A-e, R-A, C-P2e, S, Ae, Ce …
 # 앞뒤가 한글/숫자/영문이면 매치하지 않는다(단어 중간의 우연한 문자 제외).
 _CLASS_CODE_RE = re.compile(
@@ -1899,7 +1911,7 @@ def _run_sql_rows(sql: str) -> list:
     """검증을 거쳐 SQL을 실행하고 dict 행 목록을 돌려준다."""
     import sqlite3
 
-    conn = sqlite3.connect(FUND_FEES_DB)
+    conn = _connect_fees()
     conn.row_factory = sqlite3.Row
     try:
         cur = conn.execute(_validate_sql(sql))
@@ -2028,8 +2040,7 @@ def _account_types():
     """
     global _ACCOUNT_TYPES_CACHE
     if _ACCOUNT_TYPES_CACHE is None:
-        import sqlite3
-        conn = sqlite3.connect(FUND_FEES_DB)
+        conn = _connect_fees()
         _ACCOUNT_TYPES_CACHE = dict(conn.execute(
             "SELECT account_type, COUNT(*) FROM fund_fees GROUP BY account_type"))
         conn.close()
@@ -2042,8 +2053,7 @@ def _class_codes():
     """
     global _CLASS_CODES_CACHE
     if _CLASS_CODES_CACHE is None:
-        import sqlite3
-        conn = sqlite3.connect(FUND_FEES_DB)
+        conn = _connect_fees()
         codes = sorted({r[0] for r in conn.execute(
             "SELECT DISTINCT class_code FROM fund_fees WHERE class_code IS NOT NULL")},
             key=len, reverse=True)
@@ -2062,8 +2072,7 @@ def _known_fund_shorthands():
     """
     global _KNOWN_FUND_SHORTHANDS
     if _KNOWN_FUND_SHORTHANDS is None:
-        import sqlite3
-        conn = sqlite3.connect(FUND_FEES_DB)
+        conn = _connect_fees()
         names = sorted({r[0] for r in conn.execute(
             "SELECT DISTINCT fund_name FROM fund_fees") if r[0]})
         conn.close()
@@ -2659,7 +2668,7 @@ def fee_sql(state: dict) -> dict:
                             f"fee_sql: {reason} 비교 쿼리에서 LIMIT 제거 → "
                             f"전체 대상 조회")
 
-            conn = sqlite3.connect(FUND_FEES_DB)
+            conn = _connect_fees()
             conn.row_factory = sqlite3.Row
             cur = conn.execute(sql)
             cols = [d[0] for d in cur.description]
@@ -2679,7 +2688,7 @@ def fee_sql(state: dict) -> dict:
                     relaxed = _normalize_channel_sql(_normalize_class_sql(
                         _normalize_account_sql(_migrate_account_sql(relaxed))))
                     try:
-                        conn = sqlite3.connect(FUND_FEES_DB)
+                        conn = _connect_fees()
                         conn.row_factory = sqlite3.Row
                         cur = conn.execute(_validate_sql(relaxed))
                         cols = [d[0] for d in cur.description]
