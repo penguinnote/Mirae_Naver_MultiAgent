@@ -145,6 +145,11 @@ _CACHE_LOCK = threading.Lock()
 #
 # 한 번 찾아내면 _BODY_PROFILE에 고정되어 이후 호출은 곧바로 그 조합을 쓴다.
 
+# ⚠️ temperature는 ③ 프로필만 보낸다. HCX-007에서 실제로 통하는 것은
+#    ①(maxCompletionTokens+thinking)이고, 자동 탐색도 ①에서 멈춘다. 그래서
+#    call_hcx(temperature=…)로 넘긴 값(fee_sql의 0.0 포함)은 적용되지 않고
+#    서버 기본 샘플링을 쓴다. 같은 질문의 SQL·답변이 회차마다 갈리는 원인 중
+#    하나다. 대회 제출 동작을 바꾸지 않으려고 본문은 그대로 둔다.
 BODY_PROFILES = [
     # ① 추론 모델 표준: 토큰 상한 이름이 다르고 thinking을 끌 수 있다
     ("maxCompletionTokens+thinking",
@@ -227,7 +232,11 @@ def _post(messages, extra, max_tokens, temperature, timeout=120):
 def call_hcx(messages: list[dict], max_tokens: int = 1200,
              temperature: float = 0.2, raw: bool = False, verbose: bool = False,
              timeout: int = 120):
-    """통하는 body 조합을 찾아서 호출한다. 찾은 조합은 전역에 고정한다."""
+    """통하는 body 조합을 찾아서 호출한다. 찾은 조합은 전역에 고정한다.
+
+    temperature는 'maxTokens+sampling' 프로필일 때만 요청에 실린다. HCX-007이
+    쓰는 'maxCompletionTokens+thinking'에서는 무시된다(BODY_PROFILES 위 주석).
+    """
     global _BODY_PROFILE
 
     order = BODY_PROFILES
